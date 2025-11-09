@@ -229,6 +229,95 @@
             font-size: 48px;
             margin-bottom: 15px;
         }
+
+        .quote-comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        .quote-comparison-table th,
+        .quote-comparison-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .quote-comparison-table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+
+        .quote-comparison-table td {
+            font-size: 13px;
+            color: #666;
+            vertical-align: middle;
+        }
+        
+        .quote-comparison-table td small {
+            font-size: 11px;
+        }
+
+        .quote-comparison-table tr.best-option {
+            background-color: #d4edda;
+            border-left: 4px solid #28a745;
+        }
+
+        .quote-comparison-table tr.best-option td {
+            color: #155724;
+            font-weight: 600;
+        }
+
+        .best-badge {
+            display: inline-block;
+            background: #28a745;
+            color: white;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .quote-comparison-table tr:hover {
+            background-color: #f8f9fa;
+            cursor: pointer;
+        }
+
+        .quote-comparison-table tr.best-option:hover {
+            background-color: #c3e6cb;
+        }
+
+        .quote-comparison-table tr.selected {
+            outline: 3px solid #667eea;
+            outline-offset: -3px;
+        }
+
+        .wallet-url-short {
+            font-family: monospace;
+            font-size: 12px;
+            color: #764ba2;
+        }
+
+        .error-row {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .loading-spinner-small {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #e0e0e0;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
     </style>
 </head>
 <body>
@@ -248,15 +337,15 @@
 
         <form id="paymentForm">
             <div class="form-group">
-                <label for="receivingWallet">URL de Wallet Destino *</label>
-                <input 
-                    type="text" 
-                    id="receivingWallet" 
-                    name="receivingWallet" 
-                    placeholder="https://ilp.interledger-test.dev/..." 
+                <label for="receivingWallets">URLs de Wallets Destino * (máximo 5)</label>
+                <textarea 
+                    id="receivingWallets" 
+                    name="receivingWallets" 
+                    placeholder="https://ilp.interledger-test.dev/wallet1&#10;https://ilp.interledger-test.dev/wallet2&#10;https://ilp.interledger-test.dev/wallet3"
+                    rows="5"
                     required
-                >
-                <small>Ingresa la URL completa de la wallet que recibirá el pago</small>
+                ></textarea>
+                <small>Ingresa una o varias URLs (una por línea) para comparar tipos de cambio y elegir la mejor opción</small>
             </div>
 
             <div class="form-group">
@@ -265,13 +354,22 @@
                     type="number" 
                     id="amount" 
                     name="amount" 
-                    placeholder="100" 
-                    min="1"
-                    step="1"
+                    placeholder="10" 
+                    min="0.01"
+                    step="0.01"
                     required
                 >
-                <small>Monto que se debitará de tu cuenta (en la menor unidad). Ej: 100 = $1.00</small>
+                <small>Monto en tu moneda. Ej: 10.00</small>
             </div>
+
+            <div id="quotePreview" class="status-card" style="display: none; border-left-color: #28a745;">
+                <h3>📊 Comparador de Cotizaciones</h3>
+                <div id="quotePreviewContent">
+                    <p>Cargando...</p>
+                </div>
+            </div>
+            
+            <input type="hidden" id="selectedWalletUrl" name="selectedWalletUrl">
 
             <div class="form-group">
                 <label for="description">Descripción (opcional)</label>
@@ -361,6 +459,276 @@
 
         // Variables globales para el popup
         let approvalPopup = null;
+        let quoteTimeout = null;
+        
+        // Función para obtener cotizaciones de múltiples wallets
+        async function fetchQuotePreview() {
+            const receivingWalletsText = document.getElementById('receivingWallets').value.trim();
+            const amount = document.getElementById('amount').value;
+            const quotePreview = document.getElementById('quotePreview');
+            const quotePreviewContent = document.getElementById('quotePreviewContent');
+            
+            // Validar que tengamos el monto
+            if (!receivingWalletsText || !amount || parseFloat(amount) <= 0) {
+                quotePreview.style.display = 'none';
+                return;
+            }
+            
+            // Dividir las URLs por línea y filtrar líneas vacías
+            const receivingWallets = receivingWalletsText
+                .split('\n')
+                .map(url => url.trim())
+                .filter(url => url.length > 0)
+                .slice(0, 5); // Máximo 5
+            
+            if (receivingWallets.length === 0) {
+                quotePreview.style.display = 'none';
+                return;
+            }
+            
+            // Validar que todas sean URLs válidas
+            const validUrls = [];
+            for (const url of receivingWallets) {
+                try {
+                    new URL(url);
+                    validUrls.push(url);
+                } catch {
+                    // Ignorar URLs inválidas
+                }
+            }
+            
+            if (validUrls.length === 0) {
+                quotePreview.style.display = 'none';
+                return;
+            }
+            
+            // Mostrar el card con loading
+            quotePreview.style.display = 'block';
+            quotePreviewContent.innerHTML = `
+                <p style="color: #666; text-align: center;">
+                    <span class="loading-spinner-small"></span>
+                    Comparando ${validUrls.length} ${validUrls.length === 1 ? 'wallet' : 'wallets'}...
+                </p>
+            `;
+            
+            try {
+                const response = await fetch('/api/quote-preview-multiple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        receivingWalletUrls: validUrls,
+                        amount: amount
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    const quotes = data.quotes;
+                    
+                    if (quotes.length === 0) {
+                        quotePreviewContent.innerHTML = '<p style="color: #dc3545;">❌ No se pudieron obtener cotizaciones</p>';
+                        return;
+                    }
+                    
+                    // Encontrar la mejor opción (mayor valor neto = más valor llega al destinatario)
+                    let bestQuote = quotes[0];
+                    for (const quote of quotes) {
+                        if (quote.success && bestQuote.success) {
+                            if (quote.quote.netValue > bestQuote.quote.netValue) {
+                                bestQuote = quote;
+                            }
+                        }
+                    }
+                    
+                    // Calcular pérdidas respecto a la mejor opción
+                    const bestNetValue = bestQuote.success ? bestQuote.quote.netValue : 0;
+                    
+                    // Construir tabla
+                    let html = `
+                        <table class="quote-comparison-table">
+                            <thead>
+                                <tr>
+                                    <th>Wallet Destino</th>
+                                    <th>Moneda</th>
+                                    <th>Recibirá</th>
+                                    <th>Valor Real</th>
+                                    <th>Eficiencia</th>
+                                    <th>Pérdida vs Mejor</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+                    
+                    for (const item of quotes) {
+                        const isBest = item.success && item.walletUrl === bestQuote.walletUrl;
+                        const rowClass = isBest ? 'best-option' : (item.success ? '' : 'error-row');
+                        
+                        if (item.success) {
+                            const quote = item.quote;
+                            const walletShort = item.walletUrl.split('/').pop() || item.walletUrl.substring(0, 20) + '...';
+                            const sameCurrency = quote.debitAmount.assetCode === quote.receiveAmount.assetCode;
+                            
+                            // Calcular pérdida respecto a la mejor opción
+                            const lossAmount = bestNetValue - quote.netValue;
+                            const lossPercentage = ((lossAmount / bestNetValue) * 100);
+                            const lossDisplay = isBest 
+                                ? '<span style="color: #28a745;">-</span>' 
+                                : `<span style="color: #dc3545;">-${lossAmount.toFixed(2)} ${quote.debitAmount.assetCode}<br>(${lossPercentage.toFixed(2)}%)</span>`;
+                            
+                            // Color de eficiencia
+                            const efficiencyColor = quote.realEfficiency >= 95 ? '#28a745' : quote.realEfficiency >= 90 ? '#ffc107' : '#dc3545';
+                            
+                            html += `
+                                <tr class="${rowClass}" data-wallet-url="${item.walletUrl}" onclick="selectWallet('${item.walletUrl}')">
+                                    <td>
+                                        <span class="wallet-url-short">${walletShort}</span>
+                                        ${isBest ? '<span class="best-badge">✓ MEJOR</span>' : ''}
+                                    </td>
+                                    <td><strong>${quote.receiveAmount.assetCode}</strong></td>
+                                    <td><strong style="font-size: 15px;">${quote.receiveAmount.value.toFixed(2)}</strong></td>
+                                    <td>
+                                        <strong style="color: ${isBest ? '#28a745' : '#667eea'};">
+                                            ${quote.netValue.toFixed(2)} ${quote.debitAmount.assetCode}
+                                        </strong>
+                                        ${!sameCurrency ? '<br><small style="color: #999;">Tipo: ' + quote.exchangeRate.toFixed(4) + '</small>' : ''}
+                                        <br><small style="color: #999;">Costo: ${quote.costToSend.toFixed(2)} ${quote.debitAmount.assetCode}</small>
+                                    </td>
+                                    <td>
+                                        <strong style="color: ${efficiencyColor};">
+                                            ${quote.realEfficiency.toFixed(2)}%
+                                        </strong>
+                                        <br><small style="color: #dc3545;">Fee: ${quote.totalFee.toFixed(2)}</small>
+                                    </td>
+                                    <td>${lossDisplay}</td>
+                                </tr>
+                            `;
+                        } else {
+                            const walletShort = item.walletUrl.split('/').pop() || item.walletUrl.substring(0, 20) + '...';
+                            html += `
+                                <tr class="${rowClass}">
+                                    <td colspan="6">
+                                        <span class="wallet-url-short">${walletShort}</span>: 
+                                        <span style="color: #721c24;">${item.error}</span>
+                                    </td>
+                                </tr>
+                            `;
+                        }
+                    }
+                    
+                    html += `
+                            </tbody>
+                        </table>
+                    `;
+                    
+                    // Agregar análisis informativo de pérdidas
+                    if (bestQuote.success) {
+                        const nonBestQuotes = quotes.filter(q => q.success && q.walletUrl !== bestQuote.walletUrl);
+                        
+                        if (nonBestQuotes.length > 0) {
+                            html += `
+                                <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+                                    <h4 style="margin: 0 0 10px 0; color: #856404; font-size: 14px;">
+                                        💰 Análisis de Pérdidas (respecto a la mejor opción)
+                                    </h4>
+                            `;
+                            
+                            for (const item of nonBestQuotes) {
+                                const quote = item.quote;
+                                const walletShort = item.walletUrl.split('/').pop() || item.walletUrl.substring(0, 15) + '...';
+                                const lossAmount = bestNetValue - quote.netValue;
+                                const lossPercentage = ((lossAmount / bestNetValue) * 100);
+                                
+                                html += `
+                                    <p style="margin: 8px 0; font-size: 13px; color: #856404;">
+                                        <strong>${walletShort}</strong>: 
+                                        Perderías <strong style="color: #dc3545;">${lossAmount.toFixed(2)} ${quote.debitAmount.assetCode}</strong> 
+                                        (${lossPercentage.toFixed(2)}% menos valor efectivo que llega al destinatario)
+                                        ${quote.totalFee > bestQuote.quote.totalFee ? `<br>Fee más alta: +${(quote.totalFee - bestQuote.quote.totalFee).toFixed(2)} ${quote.debitAmount.assetCode}` : ''}
+                                    </p>
+                                `;
+                            }
+                            
+                            html += `
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    html += `
+                        <div style="margin-top: 20px; padding: 15px; background: #e7f3ff; border-left: 4px solid #2196F3; border-radius: 4px;">
+                            <h4 style="margin: 0 0 10px 0; color: #1565C0; font-size: 14px;">
+                                📘 Cómo leer esta tabla
+                            </h4>
+                            <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                                <strong>Recibirá</strong>: Monto exacto que llegará al destinatario en su moneda
+                            </p>
+                            <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                                <strong>Valor Real</strong>: Cuánto vale ese monto expresado en tu moneda (EUR). 
+                                ${quotes.filter(q => q.success).length > 1 ? 'Esto permite comparar todas las opciones en la misma unidad.' : ''}
+                            </p>
+                            <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                                <strong>Costo</strong>: Lo que realmente se debitará de tu cuenta (monto original + fees)
+                            </p>
+                            <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                                <strong>Eficiencia</strong>: Qué porcentaje del monto que pediste enviar realmente llega como valor
+                            </p>
+                            <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                                <strong>Pérdida vs Mejor</strong>: Cuánto valor perderías comparado con la mejor opción
+                            </p>
+                            <p style="margin: 10px 0 0 0; font-size: 12px; color: #1565C0; font-weight: 600;">
+                                ✅ La mejor opción (verde) es la que maximiza el valor que llega al destinatario
+                            </p>
+                        </div>
+                        <p style="margin-top: 15px; font-size: 13px; color: #666; text-align: center;">
+                            💡 Haz clic en una fila para seleccionarla antes de enviar el pago
+                        </p>
+                    `;
+                    
+                    quotePreviewContent.innerHTML = html;
+                    
+                    // Seleccionar automáticamente la mejor opción
+                    if (bestQuote.success) {
+                        document.getElementById('selectedWalletUrl').value = bestQuote.walletUrl;
+                    }
+                } else {
+                    quotePreviewContent.innerHTML = `<p style="color: #dc3545;">❌ ${data.error || 'Error al obtener cotizaciones'}</p>`;
+                }
+            } catch (error) {
+                console.error('Error al obtener cotizaciones:', error);
+                quotePreviewContent.innerHTML = `<p style="color: #dc3545;">❌ Error de conexión</p>`;
+            }
+        }
+        
+        // Función para seleccionar una wallet de la tabla
+        window.selectWallet = function(walletUrl) {
+            document.getElementById('selectedWalletUrl').value = walletUrl;
+            
+            // Actualizar estilos visuales
+            const rows = document.querySelectorAll('.quote-comparison-table tbody tr');
+            rows.forEach(row => {
+                if (row.dataset.walletUrl === walletUrl) {
+                    row.classList.add('selected');
+                } else {
+                    row.classList.remove('selected');
+                }
+            });
+        };
+        
+        // Agregar listeners para obtener cotización automáticamente
+        document.getElementById('receivingWallets').addEventListener('input', () => {
+            // Debounce: esperar 1000ms después de que el usuario deje de escribir (más tiempo porque pueden ser varias URLs)
+            clearTimeout(quoteTimeout);
+            quoteTimeout = setTimeout(fetchQuotePreview, 1000);
+        });
+        
+        document.getElementById('amount').addEventListener('input', () => {
+            // Debounce: esperar 1000ms después de que el usuario deje de escribir
+            clearTimeout(quoteTimeout);
+            quoteTimeout = setTimeout(fetchQuotePreview, 1000);
+        });
         
         // Manejar el envío del formulario
         document.getElementById('paymentForm').addEventListener('submit', async (e) => {
@@ -371,19 +739,25 @@
             const form = document.getElementById('paymentForm');
             
             // Obtener valores del formulario
-            const receivingWallet = document.getElementById('receivingWallet').value.trim();
+            const selectedWalletUrl = document.getElementById('selectedWalletUrl').value.trim();
             const amount = document.getElementById('amount').value;
             const description = document.getElementById('description').value.trim();
             
+            // Validar que se haya seleccionado una wallet
+            if (!selectedWalletUrl) {
+                showAlert('❌ Por favor ingresa al menos una wallet destino y espera a ver la cotización para seleccionarla', 'error');
+                return;
+            }
+            
             // Validar
-            if (!receivingWallet || !amount) {
+            if (!amount) {
                 showAlert('❌ Por favor completa todos los campos requeridos', 'error');
                 return;
             }
 
             // Validar formato de URL
             try {
-                new URL(receivingWallet);
+                new URL(selectedWalletUrl);
             } catch {
                 showAlert('❌ La URL de wallet destino no es válida', 'error');
                 return;
@@ -465,7 +839,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        receivingWalletUrl: receivingWallet,
+                        receivingWalletUrl: selectedWalletUrl,
                         amount: amount,
                         description: description
                     })
@@ -534,16 +908,23 @@
                                 }
                                 
                                 if (completeResponse.ok && completeData.success) {
+                                    // Calcular valores en unidades reales
+                                    const debitValue = parseFloat(completeData.data.debitAmount.value) / Math.pow(10, completeData.data.debitAmount.assetScale);
+                                    const receiveValue = parseFloat(completeData.data.receiveAmount.value) / Math.pow(10, completeData.data.receiveAmount.assetScale);
+                                    
                                     showAlert('✅ ¡Pago enviado exitosamente!', 'success', {
                                         'Enviado a': completeData.data.receiver,
-                                        'Monto Debitado': `${completeData.data.debitAmount.value} ${completeData.data.debitAmount.assetCode}`,
-                                        'Monto Recibido': `${completeData.data.receiveAmount.value} ${completeData.data.receiveAmount.assetCode}`,
+                                        'Monto Debitado': `${debitValue.toFixed(2)} ${completeData.data.debitAmount.assetCode}`,
+                                        'Monto Recibido': `${receiveValue.toFixed(2)} ${completeData.data.receiveAmount.assetCode}`,
                                         'ID del Pago': completeData.data.outgoingPaymentId,
                                         'Estado': completeData.data.status
                                     });
                                     
                                     // Limpiar el formulario
                                     form.reset();
+                                    
+                                    // Ocultar la cotización
+                                    document.getElementById('quotePreview').style.display = 'none';
                                 } else {
                                     showAlert('❌ Error al completar el pago: ' + (completeData.error || 'Error desconocido'), 'error',
                                         completeData.details ? { 'Detalles': completeData.details } : null);
@@ -585,16 +966,23 @@
                         }
                     }
                     
+                    // Calcular valores en unidades reales
+                    const debitValue = parseFloat(data.data.debitAmount.value) / Math.pow(10, data.data.debitAmount.assetScale);
+                    const receiveValue = parseFloat(data.data.receiveAmount.value) / Math.pow(10, data.data.receiveAmount.assetScale);
+                    
                     showAlert('✅ ¡Pago enviado exitosamente!', 'success', {
                         'Enviado a': data.data.receiver,
-                        'Monto Debitado': `${data.data.debitAmount.value} ${data.data.debitAmount.assetCode}`,
-                        'Monto Recibido': `${data.data.receiveAmount.value} ${data.data.receiveAmount.assetCode}`,
+                        'Monto Debitado': `${debitValue.toFixed(2)} ${data.data.debitAmount.assetCode}`,
+                        'Monto Recibido': `${receiveValue.toFixed(2)} ${data.data.receiveAmount.assetCode}`,
                         'ID del Pago': data.data.outgoingPaymentId,
                         'Estado': data.data.status
                     });
                     
                     // Limpiar el formulario
                     form.reset();
+                    
+                    // Ocultar la cotización
+                    document.getElementById('quotePreview').style.display = 'none';
                 } else {
                     // Error en el pago
                     let errorMessage = '❌ Error al enviar el pago: ' + (data.error || data.message || 'Error desconocido');
