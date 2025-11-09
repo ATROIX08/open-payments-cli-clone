@@ -167,45 +167,46 @@ app.post('/api/send-payment', async (req, res) => {
       }
     );
 
-    console.log('Grant pendiente obtenido, URL de interacción:', pendingOutgoingPaymentGrant.interact?.redirect);
+    const interactUrl = pendingOutgoingPaymentGrant.interact?.redirect;
+    console.log('Grant pendiente obtenido, URL de interacción:', interactUrl);
 
     const continueUrl = pendingOutgoingPaymentGrant.continue.uri;
     const continueToken = pendingOutgoingPaymentGrant.continue.access_token.value;
     const pollingFrequencyMs = pendingOutgoingPaymentGrant.continue.wait * 1000;
 
-    // Esperar antes de hacer polling
-    await sleep(pollingFrequencyMs);
-
-    // Paso 5: Hacer polling para obtener el grant aprobado
-    console.log('Paso 5: Esperando aprobación del grant...');
+    // Si hay URL de interacción, retornar inmediatamente para que el frontend pueda redirigir el popup
     let finalizedOutgoingPaymentGrant;
     
-    try {
-      finalizedOutgoingPaymentGrant = await poll({
-        request: async () => {
-          const grant = await client.grant.continue({
-            accessToken: continueToken,
-            url: continueUrl
-          });
-          
-          if (!grant?.access_token?.value) {
-            console.log('Esperando aprobación...');
-            return null;
-          }
-          
-          return grant;
-        },
-        successCondition: (response) => !!response,
-        timeoutMs: 60000,
-        pollingFrequencyMs
+    if (interactUrl) {
+      console.log('Paso 5: Se requiere aprobación del usuario');
+      console.log('🔗 URL de aprobación:', interactUrl);
+      
+      // Retornar inmediatamente al frontend con el interactUrl
+      // El frontend ya tiene un popup abierto y lo redirigirá a esta URL
+      return res.status(202).json({
+        status: 'pending_approval',
+        message: 'Se requiere aprobación del usuario',
+        interactUrl: interactUrl,
+        // Incluir datos para continuar el pago después
+        continueData: {
+          continueUrl,
+          continueToken,
+          quote: {
+            id: quote.id,
+            debitAmount: quote.debitAmount,
+            receiveAmount: quote.receiveAmount
+          },
+          incomingPaymentId: incomingPayment.id,
+          sendingWalletUrl: sendingWalletAddress.id,
+          receivingWalletUrl: receivingWalletAddress.id
+        }
       });
-    } catch (error) {
-      return res.status(400).json({
-        error: 'No se pudo completar el grant del outgoing payment',
-        details: 'Por favor, navega a la URL de interacción para aprobar el pago',
-        interactUrl: pendingOutgoingPaymentGrant.interact?.redirect,
-        continueUrl,
-        continueToken
+    } else {
+      // No hay interacción requerida
+      await sleep(pollingFrequencyMs);
+      finalizedOutgoingPaymentGrant = await client.grant.continue({
+        accessToken: continueToken,
+        url: continueUrl
       });
     }
 
@@ -252,6 +253,108 @@ app.post('/api/send-payment', async (req, res) => {
       error: 'Error al procesar el pago',
       details: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// Endpoint para completar el pago después de la aprobación
+app.post('/api/complete-payment', async (req, res) => {
+  const { continueData } = req.body;
+  
+  if (!continueData) {
+    return res.status(400).json({ error: 'Faltan datos para continuar el pago' });
+  }
+  
+  console.log('\nCompletando pago después de aprobación...');
+  
+  try {
+    const client = await createClient();
+    const { continueUrl, continueToken, quote, incomingPaymentId, sendingWalletUrl, receivingWalletUrl } = continueData;
+    
+    // Paso 5: Hacer polling del grant para verificar aprobación
+    console.log('Paso 5: Verificando aprobación del grant...');
+    
+    const pollingFrequencyMs = 1000; // 1 segundo
+    const maxAttempts = 60;
+    let attempts = 0;
+    let finalizedOutgoingPaymentGrant;
+    
+    while (attempts < maxAttempts) {
+      await sleep(pollingFrequencyMs);
+      attempts++;
+      
+      try {
+        console.log(`Esperando aprobación... (intento ${attempts}/${maxAttempts})`);
+        
+        const continuedGrant = await client.grant.continue({
+          accessToken: continueToken,
+          url: continueUrl
+        });
+        
+        if (continuedGrant?.access_token?.value) {
+          finalizedOutgoingPaymentGrant = continuedGrant;
+          console.log('✅ Grant aprobado');
+          break;
+        }
+      } catch (error) {
+        // Continuar esperando
+        continue;
+      }
+    }
+    
+    if (!finalizedOutgoingPaymentGrant) {
+      console.log('❌ Timeout esperando aprobación');
+      return res.status(408).json({
+        error: 'Timeout esperando aprobación',
+        details: 'El pago no fue aprobado a tiempo.'
+      });
+    }
+
+    const outgoingPaymentToken = finalizedOutgoingPaymentGrant.access_token.value;
+
+    // Paso 6: Crear outgoing payment
+    console.log('Paso 6: Creando outgoing payment...');
+    
+    const sendingWalletAddressUrl = parseWalletAddress(sendingWalletUrl);
+    const sendingWalletAddress = await client.walletAddress.get({ url: sendingWalletAddressUrl });
+    
+    const outgoingPayment = await client.outgoingPayment.create(
+      {
+        url: sendingWalletAddress.resourceServer,
+        accessToken: outgoingPaymentToken
+      },
+      {
+        walletAddress: sendingWalletUrl,
+        quoteId: quote.id,
+        metadata: {
+          description: 'Pago realizado desde la interfaz web'
+        }
+      }
+    );
+
+    console.log('✅ Pago completado exitosamente!');
+    console.log('Outgoing payment ID:', outgoingPayment.id);
+
+    res.json({
+      success: true,
+      message: 'Pago enviado exitosamente',
+      data: {
+        outgoingPaymentId: outgoingPayment.id,
+        incomingPaymentId: incomingPaymentId,
+        quoteId: quote.id,
+        receiver: receivingWalletUrl,
+        sentTo: receivingWalletUrl,
+        debitAmount: quote.debitAmount,
+        receiveAmount: quote.receiveAmount,
+        status: outgoingPayment.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Error al completar el pago:', error);
+    res.status(500).json({
+      error: 'Error al completar el pago',
+      details: error.description || error.message
     });
   }
 });

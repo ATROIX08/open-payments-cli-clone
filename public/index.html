@@ -359,6 +359,9 @@
             }
         }
 
+        // Variables globales para el popup
+        let approvalPopup = null;
+        
         // Manejar el envío del formulario
         document.getElementById('paymentForm').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -386,13 +389,75 @@
                 return;
             }
             
+            // ABRIR POPUP PROACTIVAMENTE antes de la petición (para evitar bloqueadores)
+            // El popup se abrirá con una página de "espera"
+            console.log('Abriendo popup proactivo para aprobación...');
+            approvalPopup = window.open(
+                'about:blank', 
+                'AprobarPagoInterledger', 
+                'width=600,height=700,left=200,top=100,scrollbars=yes,resizable=yes'
+            );
+            
+            if (approvalPopup) {
+                // Mostrar página de espera en el popup
+                approvalPopup.document.write(`
+                    <html>
+                    <head>
+                        <title>Esperando Aprobación</title>
+                        <style>
+                            body {
+                                font-family: 'Segoe UI', sans-serif;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                color: white;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                height: 100vh;
+                                margin: 0;
+                                text-align: center;
+                                padding: 20px;
+                            }
+                            .content {
+                                max-width: 400px;
+                            }
+                            h2 { font-size: 24px; margin-bottom: 20px; }
+                            p { font-size: 16px; line-height: 1.6; opacity: 0.9; }
+                            .spinner {
+                                border: 4px solid rgba(255,255,255,0.3);
+                                border-top: 4px solid white;
+                                border-radius: 50%;
+                                width: 50px;
+                                height: 50px;
+                                animation: spin 1s linear infinite;
+                                margin: 30px auto;
+                            }
+                            @keyframes spin {
+                                0% { transform: rotate(0deg); }
+                                100% { transform: rotate(360deg); }
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="content">
+                            <div class="spinner"></div>
+                            <h2>⏳ Procesando Pago</h2>
+                            <p>Estamos verificando si se requiere tu aprobación...</p>
+                            <p style="font-size: 14px; margin-top: 30px;">Por favor no cierres esta ventana.</p>
+                        </div>
+                    </body>
+                    </html>
+                `);
+            } else {
+                console.warn('No se pudo abrir popup - bloqueador de popups activo');
+            }
+            
             // Deshabilitar el botón y mostrar loading
             submitBtn.disabled = true;
             loading.classList.add('show');
             form.style.opacity = '0.5';
             
             try {
-                showAlert('⏳ Procesando pago... Esto puede tomar un momento.', 'info');
+                showAlert('⏳ Procesando pago... Si se requiere aprobación, se abrirá en la ventana emergente.', 'info');
                 
                 const response = await fetch('/api/send-payment', {
                     method: 'POST',
@@ -408,7 +473,118 @@
                 
                 const data = await response.json();
                 
+                // Manejar respuesta 202 (pending_approval)
+                if (response.status === 202 && data.status === 'pending_approval' && data.interactUrl) {
+                    console.log('Se requiere aprobación, redirigiendo popup:', data.interactUrl);
+                    
+                    // Si el popup está abierto, redirigirlo a la URL de aprobación
+                    if (approvalPopup && !approvalPopup.closed) {
+                        try {
+                            approvalPopup.location.href = data.interactUrl;
+                        } catch (e) {
+                            console.error('No se pudo redirigir el popup:', e);
+                            // Si falla, abrir uno nuevo
+                            approvalPopup = window.open(
+                                data.interactUrl, 
+                                'AprobarPagoInterledger', 
+                                'width=600,height=700,left=200,top=100,scrollbars=yes,resizable=yes'
+                            );
+                        }
+                    } else {
+                        // Si no hay popup, abrir uno nuevo
+                        approvalPopup = window.open(
+                            data.interactUrl, 
+                            'AprobarPagoInterledger', 
+                            'width=600,height=700,left=200,top=100,scrollbars=yes,resizable=yes'
+                        );
+                    }
+                    
+                    if (approvalPopup) {
+                        showAlert('🔐 Se necesita tu aprobación<br><br>' +
+                                  '✅ Se ha abierto una ventana para aprobar el pago<br>' +
+                                  '👉 Aprueba el pago en esa ventana<br>' +
+                                  '⏳ El pago se completará automáticamente después<br>' +
+                                  '📝 NO CIERRES ESTA VENTANA', 'info');
+                        
+                        // Esperar 5 segundos para que el usuario vea y apruebe, luego comenzar a completar el pago
+                        setTimeout(async () => {
+                            console.log('Completando pago...');
+                            showAlert('⏳ Completando el pago... Por favor espera.', 'info');
+                            
+                            try {
+                                const completeResponse = await fetch('/api/complete-payment', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json'
+                                    },
+                                    body: JSON.stringify({
+                                        continueData: data.continueData
+                                    })
+                                });
+                                
+                                const completeData = await completeResponse.json();
+                                
+                                // Cerrar el popup
+                                if (approvalPopup && !approvalPopup.closed) {
+                                    try {
+                                        approvalPopup.close();
+                                    } catch (e) {
+                                        // Ignorar
+                                    }
+                                }
+                                
+                                if (completeResponse.ok && completeData.success) {
+                                    showAlert('✅ ¡Pago enviado exitosamente!', 'success', {
+                                        'Enviado a': completeData.data.receiver,
+                                        'Monto Debitado': `${completeData.data.debitAmount.value} ${completeData.data.debitAmount.assetCode}`,
+                                        'Monto Recibido': `${completeData.data.receiveAmount.value} ${completeData.data.receiveAmount.assetCode}`,
+                                        'ID del Pago': completeData.data.outgoingPaymentId,
+                                        'Estado': completeData.data.status
+                                    });
+                                    
+                                    // Limpiar el formulario
+                                    form.reset();
+                                } else {
+                                    showAlert('❌ Error al completar el pago: ' + (completeData.error || 'Error desconocido'), 'error',
+                                        completeData.details ? { 'Detalles': completeData.details } : null);
+                                }
+                            } catch (error) {
+                                showAlert('❌ Error al completar el pago: ' + error.message, 'error');
+                                console.error('Error:', error);
+                            } finally {
+                                // Re-habilitar el botón
+                                submitBtn.disabled = false;
+                                loading.classList.remove('show');
+                                form.style.opacity = '1';
+                            }
+                        }, 5000); // Esperar 5 segundos antes de completar
+                    } else {
+                        console.warn('No se pudo abrir/redirigir popup');
+                        showAlert('⚠️ No se pudo abrir la ventana de aprobación.<br>' +
+                                  '🔗 Por favor APRUEBA el pago aquí: <br>' +
+                                  '<a href="' + data.interactUrl + '" target="_blank" style="color: #721c24; word-break: break-all; font-weight: bold;">' + 
+                                  data.interactUrl + '</a><br><br>' +
+                                  'Después vuelve y haz click en "Enviar Pago" otra vez.', 'error');
+                        
+                        // Re-habilitar el formulario
+                        submitBtn.disabled = false;
+                        loading.classList.remove('show');
+                        form.style.opacity = '1';
+                    }
+                    
+                    return; // No continuar con el resto de la lógica
+                }
+                
                 if (response.ok && data.success) {
+                    // Cerrar el popup si todavía está abierto
+                    if (approvalPopup && !approvalPopup.closed) {
+                        try {
+                            approvalPopup.close();
+                        } catch (e) {
+                            // Ignorar si no se puede cerrar
+                        }
+                    }
+                    
                     showAlert('✅ ¡Pago enviado exitosamente!', 'success', {
                         'Enviado a': data.data.receiver,
                         'Monto Debitado': `${data.data.debitAmount.value} ${data.data.debitAmount.assetCode}`,
@@ -420,10 +596,16 @@
                     // Limpiar el formulario
                     form.reset();
                 } else {
-                    let errorMessage = '❌ Error al enviar el pago: ' + (data.error || 'Error desconocido');
+                    // Error en el pago
+                    let errorMessage = '❌ Error al enviar el pago: ' + (data.error || data.message || 'Error desconocido');
                     
+                    // Si hay URL de interacción en un error (timeout u otro), mostrarla
                     if (data.interactUrl) {
-                        errorMessage += '<br><br>🔗 Necesitas aprobar el pago en: <a href="' + data.interactUrl + '" target="_blank">' + data.interactUrl + '</a>';
+                        errorMessage += '<br><br>⚠️ Se requiere aprobación del pago.<br>' +
+                                       '🔗 Por favor APRUEBA el pago aquí: <br>' +
+                                       '<a href="' + data.interactUrl + '" target="_blank" style="color: #721c24; word-break: break-all; font-weight: bold;">' + 
+                                       data.interactUrl + '</a><br><br>' +
+                                       'Después vuelve y haz click en "Enviar Pago" otra vez.';
                     }
                     
                     showAlert(errorMessage, 'error', data.details ? { 'Detalles': data.details } : null);
