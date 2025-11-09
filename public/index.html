@@ -26,7 +26,7 @@
             border-radius: 20px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             padding: 40px;
-            max-width: 600px;
+            max-width: 1400px;
             width: 100%;
         }
 
@@ -318,6 +318,113 @@
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
         }
+
+        /* Estilos para Matriz de Optimización */
+        .matrix-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 13px;
+        }
+
+        .matrix-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 8px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 12px;
+            border: 1px solid #5568d3;
+        }
+
+        .matrix-table th.corner {
+            background: #f8f9fa;
+            color: #333;
+            border: 1px solid #e0e0e0;
+        }
+
+        .matrix-table th.row-header {
+            background: #667eea;
+            color: white;
+            text-align: left;
+            padding-left: 15px;
+        }
+
+        .matrix-table td {
+            border: 1px solid #e0e0e0;
+            padding: 10px 8px;
+            text-align: center;
+            vertical-align: middle;
+        }
+
+        .matrix-table td.row-label {
+            background: #f8f9fa;
+            font-weight: 600;
+            text-align: left;
+            padding-left: 15px;
+            color: #667eea;
+        }
+
+        .matrix-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .matrix-cell-efficiency {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .matrix-cell-details {
+            font-size: 11px;
+            color: #666;
+        }
+
+        .matrix-cell-best {
+            background: #d4edda !important;
+            border: 3px solid #28a745 !important;
+            box-shadow: 0 0 10px rgba(40, 167, 69, 0.3);
+        }
+
+        .matrix-cell-excellent {
+            background: #e7f9ed;
+        }
+
+        .matrix-cell-good {
+            background: #fff9e6;
+        }
+
+        .matrix-cell-poor {
+            background: #ffe6e6;
+        }
+
+        .matrix-cell-error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .best-route-banner {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+        }
+
+        .best-route-banner h3 {
+            margin: 0 0 10px 0;
+            font-size: 24px;
+        }
+
+        .best-route-path {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 10px 0;
+        }
     </style>
 </head>
 <body>
@@ -335,7 +442,43 @@
 
         <div id="alertContainer"></div>
 
+        <div class="form-group" style="text-align: center; padding: 15px; background: #f8f9fa; border-radius: 10px; margin-bottom: 20px;">
+            <label style="display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer;">
+                <input type="checkbox" id="matrixMode" style="width: 20px; height: 20px;">
+                <span style="font-size: 16px; font-weight: 600;">
+                    📊 Modo Matriz de Optimización
+                </span>
+            </label>
+            <small style="display: block; margin-top: 5px; color: #666;">
+                Activa para comparar TODAS tus cuentas vs TODAS las wallets destino y encontrar la ruta óptima absoluta
+            </small>
+            
+            <div id="objectiveSelector" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 2px solid #dee2e6;">
+                <label for="optimizationObjective" style="font-weight: 600; color: #495057; display: block; margin-bottom: 10px;">
+                    🎯 Objetivo de Optimización
+                </label>
+                <select id="optimizationObjective" class="input-field" style="max-width: 500px; margin: 0 auto;">
+                    <option value="roundtrip">🔄 Roundtrip (Maximizar ROI ida-y-vuelta)</option>
+                    <option value="max_rate">📈 Max Rate (Maximizar tasa de conversión)</option>
+                    <option value="min_cost">💰 Min Cost (Minimizar costo por unidad destino)</option>
+                </select>
+                <p style="font-size: 11px; color: #666; margin-top: 10px; max-width: 600px; margin-left: auto; margin-right: auto;">
+                    <strong>Roundtrip:</strong> Ideal si planeas volver a tu moneda original | 
+                    <strong>Max Rate:</strong> Obtén más unidades de destino | 
+                    <strong>Min Cost:</strong> Paga menos por cada unidad destino
+                </p>
+            </div>
+        </div>
+
         <form id="paymentForm">
+            <div class="form-group" id="senderWalletGroup">
+                <label for="senderWallet">💳 Cuenta Emisora *</label>
+                <select id="senderWallet" name="senderWallet" required>
+                    <option value="">Selecciona una cuenta...</option>
+                </select>
+                <small>Elige desde qué cuenta enviarás el pago</small>
+            </div>
+
             <div class="form-group">
                 <label for="receivingWallets">URLs de Wallets Destino * (máximo 5)</label>
                 <textarea 
@@ -397,23 +540,47 @@
     </div>
 
     <script>
-        // Verificar estado del servidor al cargar
-        async function checkServerStatus() {
+        // Variable global para almacenar wallets disponibles
+        let availableWallets = [];
+
+        // Cargar wallets disponibles
+        async function loadAvailableWallets() {
             try {
-                const response = await fetch('/api/status');
+                const response = await fetch('/api/wallets');
                 const data = await response.json();
                 
-                if (data.status === 'ok') {
+                if (data.success && data.wallets) {
+                    availableWallets = data.wallets.filter(w => !w.error);
+                    
+                    // Llenar el selector
+                    const senderWalletSelect = document.getElementById('senderWallet');
+                    senderWalletSelect.innerHTML = '<option value="">Selecciona una cuenta...</option>';
+                    
+                    availableWallets.forEach(wallet => {
+                        const option = document.createElement('option');
+                        option.value = wallet.id;
+                        option.textContent = `💳 ${wallet.name} (${wallet.assetCode}) - ${wallet.url.split('/').pop()}`;
+                        option.setAttribute('data-asset', wallet.assetCode);
+                        option.setAttribute('data-scale', wallet.assetScale);
+                        senderWalletSelect.appendChild(option);
+                    });
+                    
+                    // Seleccionar la primera por defecto
+                    if (availableWallets.length > 0) {
+                        senderWalletSelect.value = availableWallets[0].id;
+                    }
+                    
+                    // Actualizar estado del servidor
                     document.getElementById('walletStatus').innerHTML = `
-                        <h3>Estado del Servidor</h3>
-                        <p><strong>✅ Conectado</strong></p>
-                        <p>Wallet: ${data.wallet.id}</p>
-                        <p>Moneda: ${data.wallet.assetCode} (escala: ${data.wallet.assetScale})</p>
+                        <h3>💼 Cuentas Disponibles</h3>
+                        <p><strong>✅ ${availableWallets.length} cuenta(s) configurada(s)</strong></p>
+                        ${availableWallets.map(w => `<p>• ${w.name}: ${w.assetCode}</p>`).join('')}
                     `;
                 } else {
-                    throw new Error('Error al conectar');
+                    throw new Error('No se pudieron cargar las wallets');
                 }
             } catch (error) {
+                console.error('Error cargando wallets:', error);
                 document.getElementById('walletStatus').innerHTML = `
                     <h3>Estado del Servidor</h3>
                     <p><strong>❌ Error de conexión</strong></p>
@@ -461,16 +628,30 @@
         let approvalPopup = null;
         let quoteTimeout = null;
         
-        // Función para obtener cotizaciones de múltiples wallets
+        // Función para obtener cotizaciones (modo simple o matriz)
         async function fetchQuotePreview() {
             const receivingWalletsText = document.getElementById('receivingWallets').value.trim();
             const amount = document.getElementById('amount').value;
+            const matrixMode = document.getElementById('matrixMode').checked;
+            const senderWalletId = document.getElementById('senderWallet').value;
             const quotePreview = document.getElementById('quotePreview');
             const quotePreviewContent = document.getElementById('quotePreviewContent');
             
-            // Validar que tengamos el monto
+            // Validaciones según el modo
             if (!receivingWalletsText || !amount || parseFloat(amount) <= 0) {
                 quotePreview.style.display = 'none';
+                return;
+            }
+            
+            // En modo simple, necesitamos la wallet emisora
+            if (!matrixMode && !senderWalletId) {
+                quotePreview.style.display = 'none';
+                return;
+            }
+            
+            // Si está en modo matriz, usar el endpoint de matriz
+            if (matrixMode) {
+                await fetchOptimizationMatrix();
                 return;
             }
             
@@ -519,7 +700,8 @@
                     },
                     body: JSON.stringify({
                         receivingWalletUrls: validUrls,
-                        amount: amount
+                        amount: amount,
+                        senderWalletId: senderWalletId
                     })
                 });
                 
@@ -533,18 +715,18 @@
                         return;
                     }
                     
-                    // Encontrar la mejor opción (mayor valor neto = más valor llega al destinatario)
+                    // Encontrar la mejor opción (mayor tasa = mejor conversión)
                     let bestQuote = quotes[0];
                     for (const quote of quotes) {
                         if (quote.success && bestQuote.success) {
-                            if (quote.quote.netValue > bestQuote.quote.netValue) {
+                            if (quote.quote.rate > bestQuote.quote.rate) {
                                 bestQuote = quote;
                             }
                         }
                     }
                     
-                    // Calcular pérdidas respecto a la mejor opción
-                    const bestNetValue = bestQuote.success ? bestQuote.quote.netValue : 0;
+                    // Mejor tasa para comparación
+                    const bestRate = bestQuote.success ? bestQuote.quote.rate : 0;
                     
                     // Construir tabla
                     let html = `
@@ -554,9 +736,9 @@
                                     <th>Wallet Destino</th>
                                     <th>Moneda</th>
                                     <th>Recibirá</th>
-                                    <th>Valor Real</th>
-                                    <th>Eficiencia</th>
-                                    <th>Pérdida vs Mejor</th>
+                                    <th>Tasa Efectiva</th>
+                                    <th>Costo</th>
+                                    <th>% vs Mejor</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -569,17 +751,16 @@
                         if (item.success) {
                             const quote = item.quote;
                             const walletShort = item.walletUrl.split('/').pop() || item.walletUrl.substring(0, 20) + '...';
-                            const sameCurrency = quote.debitAmount.assetCode === quote.receiveAmount.assetCode;
+                            const sameCurrency = quote.sameCurrency;
                             
-                            // Calcular pérdida respecto a la mejor opción
-                            const lossAmount = bestNetValue - quote.netValue;
-                            const lossPercentage = ((lossAmount / bestNetValue) * 100);
-                            const lossDisplay = isBest 
-                                ? '<span style="color: #28a745;">-</span>' 
-                                : `<span style="color: #dc3545;">-${lossAmount.toFixed(2)} ${quote.debitAmount.assetCode}<br>(${lossPercentage.toFixed(2)}%)</span>`;
+                            // Calcular diferencia respecto a la mejor tasa
+                            const ratioToBest = (quote.rate / bestRate) * 100;
+                            const rateDisplay = isBest 
+                                ? '<span style="color: #28a745;">100%</span>' 
+                                : `<span style="color: ${ratioToBest >= 98 ? '#28a745' : ratioToBest >= 95 ? '#ffc107' : '#dc3545'};">${ratioToBest.toFixed(2)}%</span>`;
                             
-                            // Color de eficiencia
-                            const efficiencyColor = quote.realEfficiency >= 95 ? '#28a745' : quote.realEfficiency >= 90 ? '#ffc107' : '#dc3545';
+                            // Color de tasa
+                            const rateColor = isBest ? '#28a745' : '#667eea';
                             
                             html += `
                                 <tr class="${rowClass}" data-wallet-url="${item.walletUrl}" onclick="selectWallet('${item.walletUrl}')">
@@ -590,19 +771,18 @@
                                     <td><strong>${quote.receiveAmount.assetCode}</strong></td>
                                     <td><strong style="font-size: 15px;">${quote.receiveAmount.value.toFixed(2)}</strong></td>
                                     <td>
-                                        <strong style="color: ${isBest ? '#28a745' : '#667eea'};">
-                                            ${quote.netValue.toFixed(2)} ${quote.debitAmount.assetCode}
+                                        <strong style="color: ${rateColor};">
+                                            ${quote.rate.toFixed(4)}
                                         </strong>
-                                        ${!sameCurrency ? '<br><small style="color: #999;">Tipo: ' + quote.exchangeRate.toFixed(4) + '</small>' : ''}
-                                        <br><small style="color: #999;">Costo: ${quote.costToSend.toFixed(2)} ${quote.debitAmount.assetCode}</small>
+                                        <br><small style="color: #999;">${quote.receiveAmount.assetCode}/${quote.debitAmount.assetCode}</small>
+                                        ${!sameCurrency ? '<br><small style="color: #666;">Inversa: ' + quote.inverseRate.toFixed(4) + '</small>' : ''}
                                     </td>
                                     <td>
-                                        <strong style="color: ${efficiencyColor};">
-                                            ${quote.realEfficiency.toFixed(2)}%
-                                        </strong>
-                                        <br><small style="color: #dc3545;">Fee: ${quote.totalFee.toFixed(2)}</small>
+                                        <strong>${quote.debitAmount.value.toFixed(2)}</strong>
+                                        <br><small style="color: #999;">${quote.debitAmount.assetCode}</small>
+                                        ${quote.implicitFee > 0.01 ? '<br><small style="color: #dc3545;">Fee: ' + quote.implicitFee.toFixed(2) + '</small>' : ''}
                                     </td>
-                                    <td>${lossDisplay}</td>
+                                    <td>${rateDisplay}</td>
                                 </tr>
                             `;
                         } else {
@@ -623,63 +803,107 @@
                         </table>
                     `;
                     
-                    // Agregar análisis informativo de pérdidas
-                    if (bestQuote.success) {
-                        const nonBestQuotes = quotes.filter(q => q.success && q.walletUrl !== bestQuote.walletUrl);
+                    // ===== COMPARACIÓN CON MERCADO =====
+                    if (data.marketComparison && data.marketComparison.count > 0) {
+                        const mc = data.marketComparison;
+                        const topMarket = mc.top;
                         
-                        if (nonBestQuotes.length > 0) {
-                            html += `
-                                <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
-                                    <h4 style="margin: 0 0 10px 0; color: #856404; font-size: 14px;">
-                                        💰 Análisis de Pérdidas (respecto a la mejor opción)
-                                    </h4>
-                            `;
-                            
-                            for (const item of nonBestQuotes) {
-                                const quote = item.quote;
-                                const walletShort = item.walletUrl.split('/').pop() || item.walletUrl.substring(0, 15) + '...';
-                                const lossAmount = bestNetValue - quote.netValue;
-                                const lossPercentage = ((lossAmount / bestNetValue) * 100);
-                                
-                                html += `
-                                    <p style="margin: 8px 0; font-size: 13px; color: #856404;">
-                                        <strong>${walletShort}</strong>: 
-                                        Perderías <strong style="color: #dc3545;">${lossAmount.toFixed(2)} ${quote.debitAmount.assetCode}</strong> 
-                                        (${lossPercentage.toFixed(2)}% menos valor efectivo que llega al destinatario)
-                                        ${quote.totalFee > bestQuote.quote.totalFee ? `<br>Fee más alta: +${(quote.totalFee - bestQuote.quote.totalFee).toFixed(2)} ${quote.debitAmount.assetCode}` : ''}
-                                    </p>
-                                `;
-                            }
-                            
-                            html += `
+                        html += `
+                            <div style="margin-top: 20px; padding: 20px; background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);">
+                                <h4 style="margin: 0 0 10px 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 24px;">💱</span>
+                                    COMPARACIÓN CON MERCADO (Frankfurter API)
+                                </h4>
+                                <div style="font-size: 12px; opacity: 0.9; margin-bottom: 15px;">
+                                    Comparamos las tasas de Open Payments vs las tasas reales del mercado
                                 </div>
-                            `;
-                        }
+                                
+                                <div style="background: rgba(0,0,0,0.15); padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                                    <div style="font-size: 14px; margin-bottom: 8px;">
+                                        <strong>🥇 TOP: ${topMarket.pair}</strong>
+                                    </div>
+                                    <div style="font-size: 20px; margin: 10px 0;">
+                                        ${topMarket.arbitrageType === 'OP_MEJOR' 
+                                            ? '🚀 <strong>Open Payments es MEJOR</strong>' 
+                                            : '⚠️ <strong>Mercado es mejor</strong>'
+                                        }: 
+                                        <strong style="color: #ffeb3b;">${topMarket.spreadPct > 0 ? '+' : ''}${topMarket.spreadPct.toFixed(3)}%</strong>
+                                    </div>
+                                    <div style="font-size: 13px; opacity: 0.95;">
+                                        Open Payments: <strong>${topMarket.openPaymentsRate.toFixed(4)}</strong> | 
+                                        Mercado: <strong>${topMarket.marketRate.toFixed(4)}</strong>
+                                    </div>
+                                </div>
+                                
+                                ${mc.opportunities.length > 1 ? `
+                                <div style="font-size: 13px; margin-top: 15px;">
+                                    <strong>📊 Todas las comparaciones:</strong>
+                                    <div style="margin-top: 8px; display: grid; grid-template-columns: 1fr; gap: 6px;">
+                                        ${mc.opportunities.map((opp, idx) => {
+                                            const walletShort = opp.walletUrl.split('/').pop();
+                                            return `
+                                                <div style="background: rgba(0,0,0,0.1); padding: 8px 12px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
+                                                    <span style="font-size: 12px;">
+                                                        <strong>${walletShort}</strong> (${opp.pair})
+                                                    </span>
+                                                    <span style="font-size: 12px; font-weight: bold; color: ${opp.spreadPct > 0 ? '#ffeb3b' : '#ffc107'};">
+                                                        ${opp.spreadPct > 0 ? '✅' : '❌'} ${opp.spreadPct > 0 ? '+' : ''}${opp.spreadPct.toFixed(2)}%
+                                                    </span>
+                                                </div>
+                                            `;
+                                        }).join('')}
+                                    </div>
+                                </div>
+                                ` : ''}
+                                
+                                <div style="font-size: 11px; margin-top: 15px; opacity: 0.85; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.3);">
+                                    <strong>💡 ¿Qué significa esto?</strong><br>
+                                    ${topMarket.spreadPct > 0 
+                                        ? `Open Payments te ofrece una tasa ${topMarket.spreadPct.toFixed(3)}% <strong>MEJOR</strong> que el mercado. ¡Excelente oportunidad!`
+                                        : `El mercado ofrece una tasa ${Math.abs(topMarket.spreadPct).toFixed(3)}% mejor. Open Payments tiene comisiones más altas en esta conversión.`
+                                    }
+                                </div>
+                            </div>
+                        `;
+                    } else if (data.marketComparison && data.marketComparison.baseCurrency) {
+                        html += `
+                            <div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-left: 4px solid #6c757d; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 13px; color: #495057;">
+                                    ℹ️ No se detectaron diferencias significativas con el mercado (spreads < 0.01%)
+                                </p>
+                            </div>
+                        `;
+                    } else if (data.marketComparison === null) {
+                        html += `
+                            <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+                                <p style="margin: 0; font-size: 13px; color: #856404;">
+                                    ⚠️ La moneda base (${quotes[0]?.quote?.debitAmount?.assetCode || 'N/A'}) no está soportada por la API de Frankfurter para comparación con el mercado.
+                                    <br><small>Monedas soportadas: CAD, EUR, GBP, MXN, SGD, USD, ZAR</small>
+                                </p>
+                            </div>
+                        `;
                     }
                     
                     html += `
                         <div style="margin-top: 20px; padding: 15px; background: #e7f3ff; border-left: 4px solid #2196F3; border-radius: 4px;">
                             <h4 style="margin: 0 0 10px 0; color: #1565C0; font-size: 14px;">
-                                📘 Cómo leer esta tabla
+                                📘 Comparación de Tasas de Cambio
                             </h4>
                             <p style="margin: 5px 0; font-size: 12px; color: #555;">
                                 <strong>Recibirá</strong>: Monto exacto que llegará al destinatario en su moneda
                             </p>
                             <p style="margin: 5px 0; font-size: 12px; color: #555;">
-                                <strong>Valor Real</strong>: Cuánto vale ese monto expresado en tu moneda (EUR). 
-                                ${quotes.filter(q => q.success).length > 1 ? 'Esto permite comparar todas las opciones en la misma unidad.' : ''}
+                                <strong>Tasa Efectiva</strong>: Cuántas unidades de la divisa destino recibes por cada 1 unidad de tu divisa. 
+                                Mayor tasa = mejor conversión.
                             </p>
                             <p style="margin: 5px 0; font-size: 12px; color: #555;">
-                                <strong>Costo</strong>: Lo que realmente se debitará de tu cuenta (monto original + fees)
+                                <strong>Costo</strong>: Lo que se debitará de tu cuenta (normalmente igual al monto solicitado, ya que fijamos el debitAmount)
                             </p>
                             <p style="margin: 5px 0; font-size: 12px; color: #555;">
-                                <strong>Eficiencia</strong>: Qué porcentaje del monto que pediste enviar realmente llega como valor
-                            </p>
-                            <p style="margin: 5px 0; font-size: 12px; color: #555;">
-                                <strong>Pérdida vs Mejor</strong>: Cuánto valor perderías comparado con la mejor opción
+                                <strong>% vs Mejor</strong>: Qué tan buena es esta tasa comparada con la mejor disponible (100% = la mejor)
                             </p>
                             <p style="margin: 10px 0 0 0; font-size: 12px; color: #1565C0; font-weight: 600;">
-                                ✅ La mejor opción (verde) es la que maximiza el valor que llega al destinatario
+                                ✅ La mejor opción (verde) es la que tiene la tasa más alta
                             </p>
                         </div>
                         <p style="margin-top: 15px; font-size: 13px; color: #666; text-align: center;">
@@ -702,7 +926,436 @@
             }
         }
         
-        // Función para seleccionar una wallet de la tabla
+        // Función para obtener y renderizar la matriz de optimización
+        async function fetchOptimizationMatrix() {
+            const receivingWalletsText = document.getElementById('receivingWallets').value.trim();
+            const amount = document.getElementById('amount').value;
+            const senderWalletId = document.getElementById('senderWallet').value;
+            const quotePreview = document.getElementById('quotePreview');
+            const quotePreviewContent = document.getElementById('quotePreviewContent');
+            
+            // Obtener URLs de destino
+            const receivingWallets = receivingWalletsText
+                .split('\n')
+                .map(url => url.trim())
+                .filter(url => url.length > 0)
+                .slice(0, 10); // Máximo 10 destinos
+            
+            // Validar que haya al menos una URL de destino
+            if (receivingWallets.length === 0) {
+                quotePreview.style.display = 'block';
+                quotePreviewContent.innerHTML = `
+                    <p style="color: #dc3545; text-align: center;">
+                        ❌ Por favor ingresa al menos una URL de wallet destino para generar la matriz
+                    </p>
+                `;
+                return;
+            }
+            
+            const senderCount = senderWalletId ? 1 : availableWallets.length;
+            const senderText = senderWalletId 
+                ? ` (desde ${availableWallets.find(w => w.id === senderWalletId)?.name || 'N/A'})`
+                : ' (desde todas tus cuentas)';
+            
+            // Mostrar loading
+            quotePreview.style.display = 'block';
+            quotePreviewContent.innerHTML = `
+                <p style="color: #666; text-align: center;">
+                    <span class="loading-spinner-small"></span>
+                    Generando matriz de tipos de cambio cruzados${senderText}...<br>
+                    <small>Evaluando ${senderCount} ${senderCount === 1 ? 'cuenta' : 'cuentas'} × ${receivingWallets.length} ${receivingWallets.length === 1 ? 'destino' : 'destinos'} = ${senderCount * receivingWallets.length} rutas</small>
+                </p>
+            `;
+            
+            // Obtener objetivo de optimización
+            const objective = document.getElementById('optimizationObjective').value;
+            
+            try {
+                const response = await fetch('/api/optimization-matrix', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        receivingWalletUrls: receivingWallets,
+                        amount: amount,
+                        senderWalletId: senderWalletId || null,
+                        objective: objective
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    renderOptimizationMatrix(data);
+                } else {
+                    quotePreviewContent.innerHTML = `<p style="color: #dc3545;">❌ ${data.error || 'Error al generar matriz'}</p>`;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                quotePreviewContent.innerHTML = `<p style="color: #dc3545;">❌ Error de conexión</p>`;
+            }
+        }
+        
+        // Renderizar la matriz de optimización
+        function renderOptimizationMatrix(data) {
+            const quotePreviewContent = document.getElementById('quotePreviewContent');
+            const { matrix, bestRoute, summary } = data;
+            
+            // Obtener configuración y objetivo
+            const objective = data.config?.objective || 'roundtrip';
+            const epsilonBps = data.config?.epsilonBps || 5;
+            
+            // Banner de mejor ruta según objetivo
+            let html = '';
+            if (bestRoute) {
+                const isArbitrage = availableWallets.some(w => w.url === bestRoute.receiverUrl);
+                
+                let objectiveLabel = '';
+                let scoreDisplay = '';
+                
+                switch (objective) {
+                    case 'roundtrip':
+                        objectiveLabel = '🔄 MEJOR RUTA (Roundtrip ROI)';
+                        scoreDisplay = `ROI ida-y-vuelta: <strong>${bestRoute.roiToSenderPct?.toFixed(3)}%</strong>`;
+                        break;
+                    case 'max_rate':
+                        objectiveLabel = '📈 MEJOR RUTA (Max Rate)';
+                        scoreDisplay = `Tasa: <strong>${bestRoute.rate.toFixed(4)} ${bestRoute.receiverAsset}/${bestRoute.senderAsset}</strong>`;
+                        break;
+                    case 'min_cost':
+                        objectiveLabel = '💰 MEJOR RUTA (Min Cost)';
+                        scoreDisplay = `Costo por destino: <strong>${bestRoute.costPerDestUnit.toFixed(4)} ${bestRoute.senderAsset}/${bestRoute.receiverAsset}</strong>`;
+                        break;
+                }
+                
+                html += `
+                    <div class="best-route-banner">
+                        <h3>${objectiveLabel}</h3>
+                        <div style="font-size: 11px; opacity: 0.8; margin-top: -5px; margin-bottom: 10px;">
+                            Objetivo: ${objective} | Tolerancia: ${epsilonBps} bps
+                        </div>
+                        <div class="best-route-path">
+                            ${bestRoute.senderName} (${bestRoute.senderAsset}) 
+                            → 
+                            ${bestRoute.receiverShort} (${bestRoute.receiverAsset})
+                            ${isArbitrage ? '<span style="margin-left: 10px; background: rgba(255,255,255,0.3); padding: 5px 10px; border-radius: 5px; font-size: 12px;">Entre tus cuentas</span>' : ''}
+                        </div>
+                        <div style="font-size: 20px; margin-top: 10px;">
+                            ${scoreDisplay}
+                        </div>
+                        <div style="font-size: 13px; margin-top: 10px; opacity: 0.9;">
+                            Enviando ${summary.amount.toFixed(2)} ${bestRoute.senderAsset} recibirás ${bestRoute.receiveValue.toFixed(2)} ${bestRoute.receiverAsset}
+                            <br>
+                            <span style="font-size: 11px;">
+                                Tasa: ${bestRoute.rate.toFixed(4)} | Costo/dest: ${bestRoute.costPerDestUnit.toFixed(4)}
+                                ${bestRoute.hasRoundTrip ? ` | ✓ ROI regreso: ${bestRoute.roiToSenderPct?.toFixed(3)}%` : ''}
+                            </span>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Banner de arbitraje triangular
+            if (data.arbitrage && data.arbitrage.count > 0) {
+                const top = data.arbitrage.top;
+                html += `
+                    <div class="best-route-banner" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin-top: 15px;">
+                        <h3>🔄 ARBITRAJE TRIANGULAR DETECTADO</h3>
+                        <div class="best-route-path">
+                            ${top.description}
+                        </div>
+                        <div style="font-size: 24px; margin-top: 10px; color: #ffeb3b;">
+                            Ganancia: <strong>${top.profit}</strong>
+                        </div>
+                        <div style="font-size: 13px; margin-top: 10px; opacity: 0.9;">
+                            💡 Por cada ${summary.amount.toFixed(2)} ${top.cycle[0]} que conviertas siguiendo este ciclo, 
+                            obtendrás ${(summary.amount * top.product).toFixed(2)} ${top.cycle[0]} 
+                            (ganancia neta: ${(summary.amount * (top.product - 1)).toFixed(2)} ${top.cycle[0]})
+                        </div>
+                        <div style="font-size: 12px; margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px;">
+                            <strong>Pasos:</strong><br>
+                            1️⃣ ${top.cycle[0]} → ${top.cycle[1]}: ${Object.values(top.legs)[0].rate.toFixed(4)}<br>
+                            2️⃣ ${top.cycle[1]} → ${top.cycle[2]}: ${Object.values(top.legs)[1].rate.toFixed(4)}<br>
+                            3️⃣ ${top.cycle[2]} → ${top.cycle[3]}: ${Object.values(top.legs)[2].rate.toFixed(4)}
+                        </div>
+                        ${data.arbitrage.count > 1 ? `
+                        <div style="font-size: 11px; margin-top: 10px; opacity: 0.8;">
+                            ℹ️ Se detectaron ${data.arbitrage.count} oportunidades de arbitraje triangular en total
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+            
+            // Banner de arbitraje vs mercado
+            if (data.marketComparison && data.marketComparison.count > 0) {
+                const marketOpps = data.marketComparison.arbitrageOpportunities;
+                const topMarket = data.marketComparison.top;
+                
+                html += `
+                    <div class="best-route-banner" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); margin-top: 15px;">
+                        <h3>💱 OPORTUNIDADES DE ARBITRAJE vs MERCADO</h3>
+                        <div style="font-size: 11px; opacity: 0.9; margin-top: -5px; margin-bottom: 10px;">
+                            Comparación de tasas Open Payments vs Frankfurter API (tasas de mercado)
+                        </div>
+                        <div class="best-route-path">
+                            🥇 TOP: ${topMarket.pair} 
+                        </div>
+                        <div style="font-size: 20px; margin-top: 10px; color: #ffeb3b;">
+                            ${topMarket.arbitrageType === 'OP_MEJOR' ? '🚀 Open Payments MEJOR' : '⚠️ Mercado MEJOR'}: 
+                            <strong>${topMarket.spreadPct > 0 ? '+' : ''}${topMarket.spreadPct.toFixed(3)}%</strong>
+                        </div>
+                        <div style="font-size: 13px; margin-top: 10px; opacity: 0.9;">
+                            Tasa Open Payments: <strong>${topMarket.openPaymentsRate.toFixed(4)}</strong> | 
+                            Tasa Mercado: <strong>${topMarket.marketRate.toFixed(4)}</strong>
+                        </div>
+                        <div style="font-size: 13px; margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px;">
+                            <strong>💡 ¿Qué significa esto?</strong><br>
+                            ${topMarket.arbitrageType === 'OP_MEJOR' 
+                                ? `Open Payments te ofrece una tasa ${topMarket.spreadPct.toFixed(3)}% MEJOR que el mercado. ¡Aprovecha esta oportunidad!`
+                                : `El mercado ofrece una tasa ${Math.abs(topMarket.spreadPct).toFixed(3)}% mejor. Considera otras plataformas.`
+                            }
+                        </div>
+                        <div style="font-size: 12px; margin-top: 10px; opacity: 0.9;">
+                            <strong>🔝 Top 10 Oportunidades:</strong>
+                            <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
+                                ${marketOpps.slice(0, 10).map((opp, idx) => `
+                                    <div style="background: rgba(0,0,0,0.15); padding: 5px 8px; border-radius: 4px; font-size: 11px;">
+                                        ${idx + 1}. <strong>${opp.pair}</strong>: ${opp.spreadPct > 0 ? '✅' : '❌'} ${opp.spreadPct > 0 ? '+' : ''}${opp.spreadPct.toFixed(2)}%
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                        <div style="font-size: 11px; margin-top: 10px; opacity: 0.8;">
+                            ℹ️ Total de ${data.marketComparison.count} diferencias detectadas | 
+                            Monedas comparadas: ${data.marketComparison.supportedCurrencies.join(', ')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Matriz
+            html += `
+                <h4 style="margin: 20px 0 10px 0; color: #333;">
+                    📊 Matriz de Conversiones (${summary.senderWallets} ${summary.senderWallets === 1 ? 'cuenta' : 'cuentas'} × ${summary.receiverWallets} ${summary.receiverWallets === 1 ? 'destino' : 'destinos'})
+                </h4>
+                <p style="margin: 0 0 15px 0; font-size: 13px; color: #666; text-align: center;">
+                    Tasa efectiva y monto que recibirías al enviar ${summary.amount.toFixed(2)} desde cada cuenta hacia cada destino
+                </p>
+                <div style="overflow-x: auto;">
+                    <table class="matrix-table">
+                        <thead>
+                            <tr>
+                                <th class="corner">De ➡️<br>Hacia ⬇️</th>
+            `;
+            
+            // Headers de columnas (divisas destino)
+            if (matrix.length > 0 && matrix[0].routes.length > 0) {
+                matrix[0].routes.forEach(route => {
+                    html += `<th title="${route.receiverUrl}"><strong>${route.receiverAsset || '?'}</strong><br><small>${route.receiverShort}</small></th>`;
+                });
+            }
+            
+            html += `
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            // Filas (cuentas emisoras)
+            matrix.forEach(sender => {
+                html += `<tr>`;
+                html += `<td class="row-label"><strong>${sender.senderAsset || '?'}</strong><br><small>${sender.senderName}</small></td>`;
+                
+                // Celdas de rutas
+                sender.routes.forEach(route => {
+                    if (route.isDiagonal) {
+                        // Diagonal principal (misma divisa)
+                        html += `
+                            <td style="background: #f8f9fa; text-align: center; border: 2px solid #dee2e6;">
+                                <div class="matrix-cell">
+                                    <span style="font-size: 18px; font-weight: bold; color: #495057;">1:1</span>
+                                    <span class="matrix-cell-details" style="font-size: 11px; color: #6c757d;">
+                                        ${route.receiveValue.toFixed(2)} ${route.receiverAsset}
+                                    </span>
+                                    <span class="matrix-cell-details" style="font-size: 10px; color: #28a745;">
+                                        Sin comisión
+                                    </span>
+                                </div>
+                            </td>
+                        `;
+                    } else if (route.success) {
+                        const isBest = bestRoute && 
+                                     bestRoute.senderName === sender.senderName && 
+                                     bestRoute.receiverUrl === route.receiverUrl;
+                        
+                        // Determinar color basado en el objetivo de optimización
+                        let cellClass = '';
+                        let scoreRatio = 0;
+                        
+                        if (isBest) {
+                            cellClass = 'matrix-cell-best';
+                        } else if (bestRoute && !route.sameCurrency) {
+                            // Calcular score según objetivo
+                            switch (objective) {
+                                case 'roundtrip':
+                                    // Comparar ROI
+                                    if (route.hasRoundTrip && bestRoute.roiToSenderPct) {
+                                        scoreRatio = route.roiToSenderPct / bestRoute.roiToSenderPct;
+                                    } else if (!route.hasRoundTrip) {
+                                        scoreRatio = 0; // Sin regreso = muy bajo
+                                    }
+                                    break;
+                                case 'max_rate':
+                                    // Comparar tasas
+                                    scoreRatio = route.rate / bestRoute.rate;
+                                    break;
+                                case 'min_cost':
+                                    // Comparar costos (invertido: menor = mejor)
+                                    scoreRatio = bestRoute.costPerDestUnit / route.costPerDestUnit;
+                                    break;
+                            }
+                            
+                            // Asignar color según ratio
+                            if (scoreRatio >= 0.98) {
+                                cellClass = 'matrix-cell-excellent';
+                            } else if (scoreRatio >= 0.95) {
+                                cellClass = 'matrix-cell-good';
+                            } else {
+                                cellClass = 'matrix-cell-poor';
+                            }
+                        } else {
+                            // Sin referencia o misma moneda
+                            cellClass = 'matrix-cell-good';
+                        }
+                        
+                        // Construir tooltip con toda la información
+                        const tooltipParts = [
+                            `Tasa: ${route.rate.toFixed(4)} ${route.receiverAsset}/${route.senderAsset}`,
+                            `Costo/dest: ${route.costPerDestUnit.toFixed(4)} ${route.senderAsset}/${route.receiverAsset}`
+                        ];
+                        
+                        if (route.hasRoundTrip) {
+                            tooltipParts.push(`ROI ida-vuelta: ${route.roiToSenderPct.toFixed(3)}%`);
+                        } else {
+                            tooltipParts.push('Sin ruta de regreso');
+                        }
+                        
+                        const tooltip = tooltipParts.join(' | ');
+                        
+                        // Determinar qué mostrar según objetivo
+                        let mainDisplay = '';
+                        let secondaryDisplay = '';
+                        
+                        switch (objective) {
+                            case 'roundtrip':
+                                mainDisplay = route.hasRoundTrip 
+                                    ? `${route.roiToSenderPct > 0 ? '+' : ''}${route.roiToSenderPct.toFixed(2)}%`
+                                    : '—';
+                                secondaryDisplay = route.hasRoundTrip 
+                                    ? `ROI ${route.roiToSenderPct > 0 ? '✓' : '✗'}`
+                                    : 'Sin regreso';
+                                break;
+                            case 'max_rate':
+                                mainDisplay = route.rate.toFixed(4);
+                                secondaryDisplay = `${route.receiveValue.toFixed(2)} ${route.receiverAsset}`;
+                                break;
+                            case 'min_cost':
+                                mainDisplay = route.costPerDestUnit.toFixed(4);
+                                secondaryDisplay = `Costo ${route.senderAsset}/${route.receiverAsset}`;
+                                break;
+                        }
+                        
+                        html += `
+                            <td class="${cellClass}" style="cursor: pointer;" 
+                                onclick="selectMatrixRoute('${sender.senderId}', '${route.receiverUrl}', ${route.rate})"
+                                title="${tooltip}">
+                                <div class="matrix-cell">
+                                    <span class="matrix-cell-efficiency">${mainDisplay}</span>
+                                    ${isBest ? '<span style="font-size: 20px;">⭐</span>' : ''}
+                                    <span class="matrix-cell-details" style="font-size: 10px;">
+                                        ${secondaryDisplay}
+                                    </span>
+                                </div>
+                            </td>
+                        `;
+                    } else {
+                        html += `
+                            <td class="matrix-cell-error">
+                                <div class="matrix-cell">
+                                    <span style="font-size: 18px;">❌</span>
+                                    <span class="matrix-cell-details">${route.error || 'Error'}</span>
+                                </div>
+                            </td>
+                        `;
+                    }
+                });
+                
+                html += `</tr>`;
+            });
+            
+            html += `
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div style="margin-top: 20px; padding: 15px; background: #e7f3ff; border-left: 4px solid #2196F3; border-radius: 4px;">
+                    <h4 style="margin: 0 0 10px 0; color: #1565C0; font-size: 14px;">
+                        📘 Matriz de Tipos de Cambio Cruzados
+                    </h4>
+                    <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                        <strong>🔄 ¿Qué muestra?</strong> Esta matriz muestra la <strong>tasa efectiva</strong> (R<sub>ij</sub>) 
+                        desde todas (o una) de tus cuentas hacia las wallets destino que ingresaste. Lee la fila como origen y la columna como destino.
+                    </p>
+                    <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                        <strong>📊 Tasa efectiva:</strong> El número en cada celda indica cuántas unidades de la divisa destino 
+                        recibes por cada 1 unidad de la divisa origen. Ejemplo: 1.1503 USD/EUR significa 1.1503 dólares por cada 1 euro.
+                    </p>
+                    <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                        <strong>⚡ Diagonal (1:1):</strong> Si ingresas una de tus propias wallets como destino, verás una celda gris 
+                        mostrando tasa 1:1 (misma wallet, sin conversión).
+                    </p>
+                    <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                        <strong>🔺 Arbitraje triangular:</strong> Si ves un banner púrpura arriba, encontramos un ciclo 
+                        donde puedes ganar dinero haciendo conversiones en cadena (R<sub>ab</sub> × R<sub>bc</sub> × R<sub>ca</sub> > 1).
+                    </p>
+                    <p style="margin: 10px 0 5px 0; font-size: 12px; color: #555; font-weight: 600;">
+                        Código de colores (relativo a mejor tasa):
+                    </p>
+                    <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                        • <strong>Verde brillante ⭐</strong>: Mejor tasa absoluta (conversión más favorable)
+                    </p>
+                    <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                        • <strong>Verde claro</strong>: Excelente (≥98% de la mejor tasa)
+                    </p>
+                    <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                        • <strong>Amarillo</strong>: Buena (≥95% de la mejor tasa)
+                    </p>
+                    <p style="margin: 5px 0; font-size: 12px; color: #555;">
+                        • <strong>Rojo</strong>: Pobre (<95% de la mejor tasa - spread alto)
+                    </p>
+                    <p style="margin: 10px 0 0 0; font-size: 12px; color: #1565C0; font-weight: 600;">
+                        💡 Haz clic en cualquier celda para seleccionar esa conversión y realizar el pago
+                    </p>
+                </div>
+            `;
+            
+            quotePreviewContent.innerHTML = html;
+            
+            // Auto-seleccionar la mejor ruta
+            if (bestRoute) {
+                document.getElementById('senderWallet').value = bestRoute.senderId;
+                document.getElementById('selectedWalletUrl').value = bestRoute.receiverUrl;
+            }
+        }
+        
+        // Función para seleccionar una ruta de la matriz
+        window.selectMatrixRoute = function(senderId, receiverUrl, rate) {
+            document.getElementById('senderWallet').value = senderId;
+            document.getElementById('selectedWalletUrl').value = receiverUrl;
+            showAlert(`✅ Ruta seleccionada: ${senderId} → ${receiverUrl.split('/').pop()} (tasa: ${rate.toFixed(4)})`, 'success');
+        };
+        
+        // Función para seleccionar una wallet de la tabla (modo simple)
         window.selectWallet = function(walletUrl) {
             document.getElementById('selectedWalletUrl').value = walletUrl;
             
@@ -717,7 +1370,69 @@
             });
         };
         
+        // Listener para el modo matriz
+        document.getElementById('matrixMode').addEventListener('change', (e) => {
+            const matrixMode = e.target.checked;
+            const senderWalletSelect = document.getElementById('senderWallet');
+            const senderWalletLabel = document.querySelector('label[for="senderWallet"]');
+            const objectiveSelector = document.getElementById('objectiveSelector');
+            
+            if (matrixMode) {
+                // Mostrar selector de objetivo
+                objectiveSelector.style.display = 'block';
+                
+                // Modo matriz: cambiar el label del selector de cuenta a opcional
+                if (senderWalletLabel) {
+                    senderWalletLabel.innerHTML = '💳 Filtrar por Cuenta Emisora <small style="font-weight: normal; color: #666;">(opcional - deja en blanco para ver todas)</small>';
+                }
+                senderWalletSelect.removeAttribute('required');
+                
+                // Agregar opción "Todas las cuentas"
+                if (!senderWalletSelect.querySelector('option[value=""]')) {
+                    const allOption = document.createElement('option');
+                    allOption.value = '';
+                    allOption.textContent = '🌐 Todas las cuentas (matriz completa)';
+                    senderWalletSelect.insertBefore(allOption, senderWalletSelect.firstChild);
+                }
+                senderWalletSelect.value = ''; // Seleccionar "Todas" por defecto
+            } else {
+                // Ocultar selector de objetivo
+                objectiveSelector.style.display = 'none';
+                
+                // Modo simple: restaurar label y hacer requerido
+                if (senderWalletLabel) {
+                    senderWalletLabel.innerHTML = '💳 Cuenta Emisora *';
+                }
+                senderWalletSelect.setAttribute('required', 'required');
+                
+                // Remover opción "Todas"
+                const allOption = senderWalletSelect.querySelector('option[value=""]');
+                if (allOption) {
+                    allOption.remove();
+                }
+                // Seleccionar la primera cuenta válida
+                if (senderWalletSelect.options.length > 0) {
+                    senderWalletSelect.selectedIndex = 0;
+                }
+            }
+            
+            // Actualizar cotizaciones
+            clearTimeout(quoteTimeout);
+            quoteTimeout = setTimeout(fetchQuotePreview, 500);
+        });
+        
+        // Listener para el cambio de objetivo
+        document.getElementById('optimizationObjective').addEventListener('change', () => {
+            clearTimeout(quoteTimeout);
+            quoteTimeout = setTimeout(fetchQuotePreview, 500);
+        });
+        
         // Agregar listeners para obtener cotización automáticamente
+        document.getElementById('senderWallet').addEventListener('change', () => {
+            clearTimeout(quoteTimeout);
+            quoteTimeout = setTimeout(fetchQuotePreview, 500);
+        });
+        
         document.getElementById('receivingWallets').addEventListener('input', () => {
             // Debounce: esperar 1000ms después de que el usuario deje de escribir (más tiempo porque pueden ser varias URLs)
             clearTimeout(quoteTimeout);
@@ -739,13 +1454,24 @@
             const form = document.getElementById('paymentForm');
             
             // Obtener valores del formulario
+            const senderWalletId = document.getElementById('senderWallet').value;
             const selectedWalletUrl = document.getElementById('selectedWalletUrl').value.trim();
             const amount = document.getElementById('amount').value;
             const description = document.getElementById('description').value.trim();
+            const matrixMode = document.getElementById('matrixMode').checked;
             
-            // Validar que se haya seleccionado una wallet
+            // Validaciones
             if (!selectedWalletUrl) {
                 showAlert('❌ Por favor ingresa al menos una wallet destino y espera a ver la cotización para seleccionarla', 'error');
+                return;
+            }
+            
+            if (!senderWalletId) {
+                if (matrixMode) {
+                    showAlert('❌ Por favor haz clic en una celda de la matriz para seleccionar la ruta óptima', 'error');
+                } else {
+                    showAlert('❌ Por favor selecciona una cuenta emisora', 'error');
+                }
                 return;
             }
             
@@ -841,7 +1567,8 @@
                     body: JSON.stringify({
                         receivingWalletUrl: selectedWalletUrl,
                         amount: amount,
-                        description: description
+                        description: description,
+                        senderWalletId: senderWalletId
                     })
                 });
                 
@@ -1009,8 +1736,8 @@
             }
         });
 
-        // Verificar estado al cargar la página
-        checkServerStatus();
+        // Cargar wallets disponibles al iniciar
+        loadAvailableWallets();
     </script>
 </body>
 </html>

@@ -15,17 +15,151 @@ app.use(express.static('public'));
 
 const PORT = process.env.PORT || 3000;
 
-// Función para leer la clave privada
-function getPrivateKey() {
-  const privateKeyPath = process.env.PRIVATE_KEY_PATH || './keys/private_python.key';
+// ===== FUNCIONES PARA TASAS DE MERCADO (FRANKFURTER API) =====
+async function getMarketRates(baseCurrency = 'EUR') {
+  try {
+    const response = await fetch(`https://api.frankfurter.app/latest?from=${baseCurrency}`);
+    if (!response.ok) {
+      throw new Error(`Frankfurter API error: ${response.status}`);
+    }
+    const data = await response.json();
+    return data.rates;
+  } catch (error) {
+    console.error(`Error obteniendo tasas de mercado para ${baseCurrency}:`, error.message);
+    return null;
+  }
+}
+
+// Monedas soportadas por Frankfurter que tenemos en Open Payments
+const MARKET_SUPPORTED_CURRENCIES = ['CAD', 'EUR', 'GBP', 'MXN', 'SGD', 'USD', 'ZAR'];
+// PEN y PKR no están en Frankfurter
+
+async function getAllMarketRates() {
+  const allRates = {};
+  
+  for (const currency of MARKET_SUPPORTED_CURRENCIES) {
+    const rates = await getMarketRates(currency);
+    if (rates) {
+      allRates[currency] = rates;
+    }
+    // Pequeño delay para no saturar la API
+    await sleep(100);
+  }
+  
+  return allRates;
+}
+
+function calculateArbitrageOpportunities(openPaymentsRates, marketRates) {
+  const opportunities = [];
+  
+  for (const fromCurrency of MARKET_SUPPORTED_CURRENCIES) {
+    const marketFromRates = marketRates[fromCurrency];
+    const opFromRates = openPaymentsRates[fromCurrency];
+    
+    if (!marketFromRates || !opFromRates) continue;
+    
+    for (const toCurrency of MARKET_SUPPORTED_CURRENCIES) {
+      if (fromCurrency === toCurrency) continue;
+      
+      const marketRate = marketFromRates[toCurrency];
+      const opRate = opFromRates[toCurrency]?.rate;
+      
+      if (!marketRate || !opRate) continue;
+      
+      // Calcular diferencia: si OP da más que el mercado, hay arbitraje
+      const spreadPct = ((opRate - marketRate) / marketRate) * 100;
+      
+      if (Math.abs(spreadPct) > 0.1) { // Más de 0.1% de diferencia
+        opportunities.push({
+          pair: `${fromCurrency}→${toCurrency}`,
+          fromCurrency,
+          toCurrency,
+          openPaymentsRate: opRate,
+          marketRate: marketRate,
+          spreadPct: spreadPct,
+          arbitrageType: spreadPct > 0 ? 'OP_MEJOR' : 'MERCADO_MEJOR',
+          profitPotential: Math.abs(spreadPct)
+        });
+      }
+    }
+  }
+  
+  // Ordenar por mayor potencial de ganancia
+  opportunities.sort((a, b) => b.profitPotential - a.profitPotential);
+  
+  return opportunities;
+}
+
+// Detectar todas las wallets configuradas en el .env
+function getAvailableWallets() {
+  const wallets = [];
+  const envKeys = Object.keys(process.env);
+  
+  // Buscar patrones como WALLET_EUR_URL, WALLET_USD_URL, etc.
+  const walletPrefixes = new Set();
+  envKeys.forEach(key => {
+    const match = key.match(/^WALLET_([A-Z]+)_URL$/);
+    if (match) {
+      walletPrefixes.add(match[1]);
+    }
+  });
+  
+  // Para cada prefijo encontrado, construir la configuración de la wallet
+  walletPrefixes.forEach(prefix => {
+    const walletConfig = {
+      id: prefix,
+      name: prefix,
+      url: process.env[`WALLET_${prefix}_URL`],
+      keyId: process.env[`WALLET_${prefix}_KEY_ID`],
+      privateKeyPath: process.env[`WALLET_${prefix}_PRIVATE_KEY_PATH`],
+      publicKeyPath: process.env[`WALLET_${prefix}_PUBLIC_KEY_PATH`]
+    };
+    
+    // Solo agregar si tiene todos los campos necesarios
+    if (walletConfig.url && walletConfig.keyId && walletConfig.privateKeyPath) {
+      wallets.push(walletConfig);
+    }
+  });
+  
+  // Si no hay wallets con prefijo, usar las variables legacy
+  if (wallets.length === 0 && process.env.WALLET_URL && process.env.KEY_ID) {
+    wallets.push({
+      id: 'DEFAULT',
+      name: 'DEFAULT',
+      url: process.env.WALLET_URL,
+      keyId: process.env.KEY_ID,
+      privateKeyPath: process.env.PRIVATE_KEY_PATH || './keys/private_python.key',
+      publicKeyPath: process.env.PUBLIC_KEY_PATH || './keys/public_python.key'
+    });
+  }
+  
+  return wallets;
+}
+
+const AVAILABLE_WALLETS = getAvailableWallets();
+
+console.log(`\n💼 Wallets detectadas: ${AVAILABLE_WALLETS.length}`);
+AVAILABLE_WALLETS.forEach(w => console.log(`   - ${w.name}: ${w.url}`));
+
+// Función para leer la clave privada de una wallet específica
+function getPrivateKey(walletConfig = null) {
+  const privateKeyPath = walletConfig 
+    ? walletConfig.privateKeyPath 
+    : (process.env.PRIVATE_KEY_PATH || './keys/private_python.key');
   return fs.readFileSync(privateKeyPath, 'utf8');
 }
 
-// Función para crear el cliente autenticado
-async function createClient() {
-  const walletAddressUrl = parseWalletAddress(process.env.WALLET_URL);
-  const privateKey = getPrivateKey();
-  const keyId = process.env.KEY_ID;
+// Función para crear el cliente autenticado para una wallet específica
+async function createClient(walletConfig = null) {
+  const config = walletConfig || {
+    url: process.env.WALLET_URL,
+    keyId: process.env.KEY_ID,
+    privateKeyPath: process.env.PRIVATE_KEY_PATH || './keys/private_python.key'
+  };
+  
+  const walletAddressUrl = parseWalletAddress(config.url);
+  const privateKey = getPrivateKey(config);
+  const keyId = config.keyId;
 
   return await createAuthenticatedClient({
     walletAddressUrl,
@@ -36,7 +170,7 @@ async function createClient() {
 
 // Endpoint principal para enviar pagos
 app.post('/api/send-payment', async (req, res) => {
-  const { receivingWalletUrl, amount, description } = req.body;
+  const { receivingWalletUrl, amount, description, senderWalletId } = req.body;
 
   if (!receivingWalletUrl || !amount) {
     return res.status(400).json({ 
@@ -45,15 +179,26 @@ app.post('/api/send-payment', async (req, res) => {
   }
 
   try {
-    console.log('Iniciando proceso de pago...');
+    console.log('\nIniciando proceso de pago...');
     console.log('Destinatario:', receivingWalletUrl);
     console.log('Monto:', amount);
+    
+    // Obtener configuración de la wallet emisora
+    let senderWalletConfig = null;
+    if (senderWalletId) {
+      senderWalletConfig = AVAILABLE_WALLETS.find(w => w.id === senderWalletId);
+      if (!senderWalletConfig) {
+        return res.status(400).json({ error: `Wallet ${senderWalletId} no encontrada` });
+      }
+      console.log('Wallet emisora:', senderWalletConfig.name, '-', senderWalletConfig.url);
+    }
 
     // Crear cliente
-    const client = await createClient();
+    const client = await createClient(senderWalletConfig);
     
     // Obtener las wallet addresses
-    const sendingWalletAddressUrl = parseWalletAddress(process.env.WALLET_URL);
+    const sendingWalletUrl = senderWalletConfig ? senderWalletConfig.url : process.env.WALLET_URL;
+    const sendingWalletAddressUrl = parseWalletAddress(sendingWalletUrl);
     const receivingWalletAddressUrl = parseWalletAddress(receivingWalletUrl);
 
     console.log('Obteniendo información de las wallets...');
@@ -205,7 +350,8 @@ app.post('/api/send-payment', async (req, res) => {
           },
           incomingPaymentId: incomingPayment.id,
           sendingWalletUrl: sendingWalletAddress.id,
-          receivingWalletUrl: receivingWalletAddress.id
+          receivingWalletUrl: receivingWalletAddress.id,
+          senderWalletId: senderWalletConfig?.id || null  // NUEVO: guardar el ID de la wallet emisora
         }
       });
     } else {
@@ -275,7 +421,19 @@ app.post('/api/complete-payment', async (req, res) => {
   console.log('\nCompletando pago después de aprobación...');
   
   try {
-    const client = await createClient();
+    // Obtener configuración de la wallet emisora
+    const { senderWalletId } = continueData;
+    let senderWalletConfig = null;
+    
+    if (senderWalletId) {
+      senderWalletConfig = AVAILABLE_WALLETS.find(w => w.id === senderWalletId);
+      if (!senderWalletConfig) {
+        return res.status(400).json({ error: `Wallet emisora no encontrada: ${senderWalletId}` });
+      }
+      console.log(`Usando wallet emisora: ${senderWalletConfig.name} (${senderWalletConfig.id})`);
+    }
+    
+    const client = await createClient(senderWalletConfig);
     const { continueUrl, continueToken, quote, incomingPaymentId, sendingWalletUrl, receivingWalletUrl } = continueData;
     
     // Paso 5: Hacer polling del grant para verificar aprobación
@@ -366,9 +524,445 @@ app.post('/api/complete-payment', async (req, res) => {
   }
 });
 
-// Endpoint para obtener cotizaciones de múltiples wallets
+// Endpoint para obtener matriz de optimización (todas las rutas posibles)
+app.post('/api/optimization-matrix', async (req, res) => {
+  const { receivingWalletUrls, amount, senderWalletId, objective } = req.body;
+  
+  if (!amount) {
+    return res.status(400).json({ error: 'Se requiere el monto' });
+  }
+  
+  // Objetivo de optimización (default: roundtrip)
+  const optimizationObjective = objective || 'roundtrip';
+  const epsilonBps = 5; // 5 basis points de tolerancia
+  const epsilon = epsilonBps / 10000;
+  
+  // Wallets emisoras: filtrar por senderWalletId si se especifica, sino usar todas
+  const senderWallets = senderWalletId 
+    ? AVAILABLE_WALLETS.filter(w => w.id === senderWalletId)
+    : AVAILABLE_WALLETS;
+  
+  // Wallets receptoras: URLs proporcionadas + TODAS las wallets propias (para arbitraje completo)
+  let receivingWallets = [];
+  
+  // 1. Agregar URLs proporcionadas
+  if (receivingWalletUrls && Array.isArray(receivingWalletUrls)) {
+    receivingWallets = receivingWalletUrls
+      .map(url => url.trim())
+      .filter(url => url.length > 0);
+  }
+  
+  // 2. Agregar TODAS las wallets propias (para arbitraje)
+  AVAILABLE_WALLETS.forEach(wallet => {
+    if (!receivingWallets.includes(wallet.url)) {
+      receivingWallets.push(wallet.url);
+    }
+  });
+  
+  // Limitar a 15 destinos totales
+  receivingWallets = receivingWallets.slice(0, 15);
+  
+  console.log(`\n📊 Generando matriz de tipos de cambio cruzados (${senderWallets.length}×${receivingWallets.length})...`);
+  console.log(`Monto base: ${amount}`);
+  console.log(`Total de rutas a evaluar: ${senderWallets.length * receivingWallets.length}`);
+  
+  console.log(`Objetivo de optimización: ${optimizationObjective}`);
+  console.log(`Tolerancia: ${epsilonBps} bps`);
+  
+  try {
+    const matrix = [];
+    let bestRoute = null;
+    let bestScore = -Infinity;
+    
+    // Estructura para almacenar tasas por activo (para detección de arbitraje y ROI)
+    const assetRates = {}; // { [assetFrom]: { [assetTo]: { rate, costPerDestUnit, path, timestamp } } }
+    
+    function setRate(from, to, rate, costPerDestUnit, path) {
+      if (!assetRates[from]) assetRates[from] = {};
+      // Guardar la mejor tasa i->j observada (maximiza rate)
+      if (!assetRates[from][to] || rate > assetRates[from][to].rate) {
+        assetRates[from][to] = { 
+          rate, 
+          costPerDestUnit,
+          path,
+          timestamp: Date.now()
+        };
+      }
+    }
+    
+    function getReverseRate(from, to) {
+      // Busca la mejor tasa de regreso to->from
+      return assetRates[to]?.[from]?.rate || null;
+    }
+    
+    // Para cada cuenta emisora
+    for (const senderWallet of senderWallets) {
+      const senderRow = {
+        senderId: senderWallet.id,
+        senderName: senderWallet.name,
+        senderAsset: null,
+        routes: []
+      };
+      
+      try {
+        const client = await createClient(senderWallet);
+        const senderWalletAddressUrl = parseWalletAddress(senderWallet.url);
+        const senderWalletAddress = await client.walletAddress.get({ url: senderWalletAddressUrl });
+        
+        senderRow.senderAsset = senderWalletAddress.assetCode;
+        senderRow.senderScale = senderWalletAddress.assetScale;
+        
+        const originalAmount = parseFloat(amount);
+        const amountInBaseUnits = Math.round(originalAmount * Math.pow(10, senderWalletAddress.assetScale));
+        
+                // Para cada wallet destino
+                for (const receivingWalletUrl of receivingWallets) {
+                  try {
+                    const receivingWalletAddressUrl = parseWalletAddress(receivingWalletUrl);
+                    const receivingWalletAddress = await client.walletAddress.get({ url: receivingWalletAddressUrl });
+                    
+                    // Si es la misma wallet (misma URL), mostrar diagonal (tasa 1:1)
+                    if (receivingWalletUrl === senderWallet.url) {
+                      const asset = senderWalletAddress.assetCode;
+                      senderRow.routes.push({
+                        receiverUrl: receivingWalletUrl,
+                        receiverShort: receivingWalletUrl.split('/').pop(),
+                        receiverAsset: asset,
+                        success: true,
+                        isDiagonal: true,
+                        rate: 1.0,
+                        inverseRate: 1.0,
+                        receiveValue: originalAmount,
+                        debitValue: originalAmount,
+                        sameCurrency: true,
+                        senderAsset: asset
+                      });
+                      
+                      // Registrar tasa 1:1 para misma wallet
+                      setRate(asset, asset, 1.0, { 
+                        senderId: senderWallet.id, 
+                        receiverUrl: receivingWalletUrl 
+                      });
+                      continue;
+                    }
+            
+            // Crear incoming payment
+            const incomingPaymentGrant = await client.grant.request(
+              { url: receivingWalletAddress.authServer },
+              {
+                access_token: {
+                  access: [{ type: 'incoming-payment', actions: ['create'] }]
+                }
+              }
+            );
+            
+            const incomingPayment = await client.incomingPayment.create(
+              {
+                url: receivingWalletAddress.resourceServer,
+                accessToken: incomingPaymentGrant.access_token.value
+              },
+              {
+                walletAddress: receivingWalletAddress.id,
+                metadata: { description: 'Matriz de optimización' }
+              }
+            );
+            
+            // Obtener quote grant
+            const quoteGrant = await client.grant.request(
+              { url: senderWalletAddress.authServer },
+              {
+                access_token: {
+                  access: [{ type: 'quote', actions: ['read', 'create'] }]
+                }
+              }
+            );
+            
+            // Crear quote
+            const quote = await client.quote.create(
+              {
+                url: senderWalletAddress.resourceServer,
+                accessToken: quoteGrant.access_token.value
+              },
+              {
+                receiver: incomingPayment.id,
+                walletAddress: senderWalletAddress.id,
+                method: 'ilp',
+                debitAmount: {
+                  assetCode: senderWalletAddress.assetCode,
+                  assetScale: senderWalletAddress.assetScale,
+                  value: amountInBaseUnits.toString()
+                }
+              }
+            );
+            
+            // ===== CALCULAR MÉTRICAS CORRECTAMENTE =====
+            // Valores en unidades humanas
+            const debitValue = Number(quote.debitAmount.value) / (10 ** quote.debitAmount.assetScale);
+            const receiveValue = Number(quote.receiveAmount.value) / (10 ** quote.receiveAmount.assetScale);
+            
+            const senderAsset = quote.debitAmount.assetCode;
+            const receiverAsset = quote.receiveAmount.assetCode;
+            const sameCurrency = senderAsset === receiverAsset;
+            
+            // Métricas fundamentales
+            const rate = receiveValue / debitValue;  // R_ij: destino por 1 de origen
+            const costPerDestUnit = debitValue / receiveValue; // Cuánto origen cuesta 1 destino
+            const inverseRate = 1 / rate; // R_ji implícita (solo para mostrar)
+            
+            const route = {
+              receiverUrl: receivingWalletUrl,
+              receiverShort: receivingWalletUrl.split('/').pop(),
+              receiverAsset: receiverAsset,
+              senderAsset: senderAsset,
+              debitValue: debitValue,
+              receiveValue: receiveValue,
+              rate: rate,                       // Tasa efectiva
+              costPerDestUnit: costPerDestUnit, // Costo por unidad destino
+              inverseRate: inverseRate,
+              sameCurrency: sameCurrency,
+              success: true,
+              // ROI será calculado en segunda pasada
+              hasRoundTrip: false,
+              roundTripProduct: null,
+              roiToSenderPct: null
+            };
+            
+            // Registrar tasa para detección de arbitraje y ROI
+            setRate(senderAsset, receiverAsset, rate, costPerDestUnit, {
+              senderId: senderWallet.id,
+              senderName: senderWallet.name,
+              receiverUrl: receivingWalletUrl,
+              receiverShort: receivingWalletUrl.split('/').pop()
+            });
+            
+            senderRow.routes.push(route);
+            console.log(`✓ ${senderWallet.name} → ${receivingWalletUrl.split('/').pop()}: ${rate.toFixed(4)} ${receiverAsset}/${senderAsset}`);
+            
+          } catch (error) {
+            console.error(`✗ ${senderWallet.name} → ${receivingWalletUrl.split('/').pop()}: ${error.message}`);
+            senderRow.routes.push({
+              receiverUrl: receivingWalletUrl,
+              receiverShort: receivingWalletUrl.split('/').pop(),
+              success: false,
+              error: error.message
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`✗ Error con cuenta emisora ${senderWallet.name}:`, error.message);
+        senderRow.error = error.message;
+      }
+      
+      matrix.push(senderRow);
+    }
+    
+    // ===== SEGUNDA PASADA: CALCULAR ROI IDA-Y-VUELTA =====
+    console.log(`\n🔄 Calculando ROI ida-y-vuelta para cada celda...`);
+    
+    for (const row of matrix) {
+      for (const route of row.routes) {
+        if (!route.success || route.isDiagonal) continue;
+        
+        const { senderAsset, receiverAsset } = route;
+        const reverseRate = getReverseRate(senderAsset, receiverAsset);
+        
+        if (reverseRate) {
+          // Existe una ruta de regreso
+          const roundTripProduct = route.rate * reverseRate; // i→j→i
+          const roiToSenderPct = (roundTripProduct - 1) * 100;
+          
+          route.hasRoundTrip = true;
+          route.roundTripProduct = roundTripProduct;
+          route.roiToSenderPct = roiToSenderPct;
+          
+          if (roiToSenderPct > epsilon * 100) {
+            console.log(`  ✓ ${senderAsset}→${receiverAsset}→${senderAsset}: ROI +${roiToSenderPct.toFixed(3)}%`);
+          }
+        }
+      }
+    }
+    
+    // ===== SELECCIONAR MEJOR RUTA SEGÚN OBJETIVO =====
+    console.log(`\n🎯 Seleccionando mejor ruta según objetivo: ${optimizationObjective}`);
+    
+    for (const row of matrix) {
+      for (const route of row.routes) {
+        if (!route.success || route.isDiagonal || route.sameCurrency) continue;
+        
+        let score = 0;
+        
+        switch (optimizationObjective) {
+          case 'roundtrip':
+            // Maximizar ROI ida-y-vuelta (si existe)
+            if (route.hasRoundTrip) {
+              score = route.roiToSenderPct;
+            } else {
+              score = -Infinity; // Sin regreso, no óptimo para roundtrip
+            }
+            break;
+          
+          case 'max_rate':
+            // Maximizar rate (más destino por 1 origen)
+            score = route.rate;
+            break;
+          
+          case 'min_cost':
+            // Minimizar costPerDestUnit (menos origen por 1 destino)
+            score = -route.costPerDestUnit; // Negativo para que menor costo = mayor score
+            break;
+          
+          default:
+            score = route.rate; // Fallback
+        }
+        
+        if (score > bestScore) {
+          bestScore = score;
+          bestRoute = {
+            ...route,
+            senderId: row.senderId,
+            senderName: row.senderName,
+            score: score,
+            objective: optimizationObjective
+          };
+        }
+      }
+    }
+    
+    // ===== DETECCIÓN DE ARBITRAJE TRIANGULAR =====
+    function findTriangularArbitrage(assetRates, epsilon = 0.0005) { // 5 bps de tolerancia
+      const assets = Object.keys(assetRates);
+      const opportunities = [];
+      
+      for (let i = 0; i < assets.length; i++) {
+        for (let j = 0; j < assets.length; j++) {
+          for (let k = 0; k < assets.length; k++) {
+            const a = assets[i], b = assets[j], c = assets[k];
+            // Necesitamos 3 divisas diferentes
+            if (new Set([a, b, c]).size < 3) continue;
+            
+            const R_ab = assetRates[a]?.[b]?.rate;
+            const R_bc = assetRates[b]?.[c]?.rate;
+            const R_ca = assetRates[c]?.[a]?.rate;
+            
+            if (!R_ab || !R_bc || !R_ca) continue;
+            
+            // Producto de tasas: por cada 1 unidad de 'a', cuántas unidades de 'a' obtengo al final
+            const product = R_ab * R_bc * R_ca;
+            
+            if (product > 1 + epsilon) {
+              opportunities.push({
+                cycle: [a, b, c, a],
+                product: product,
+                gainPct: (product - 1) * 100,
+                legs: {
+                  [`${a}→${b}`]: { rate: R_ab, path: assetRates[a][b].path },
+                  [`${b}→${c}`]: { rate: R_bc, path: assetRates[b][c].path },
+                  [`${c}→${a}`]: { rate: R_ca, path: assetRates[c][a].path }
+                },
+                description: `${a} → ${b} → ${c} → ${a}`,
+                profit: `+${((product - 1) * 100).toFixed(3)}%`
+              });
+            }
+          }
+        }
+      }
+      
+      // Ordenar por mayor ganancia
+      opportunities.sort((x, y) => y.product - x.product);
+      return opportunities;
+    }
+    
+    const arbitrageOpportunities = findTriangularArbitrage(assetRates, epsilon);
+    
+    // ===== COMPARAR CON TASAS DE MERCADO =====
+    console.log(`\n💱 Obteniendo tasas de mercado (Frankfurter API)...`);
+    const marketRates = await getAllMarketRates();
+    const marketArbitrageOpportunities = calculateArbitrageOpportunities(assetRates, marketRates);
+    
+    console.log(`\n📊 ANÁLISIS DE ARBITRAJE vs MERCADO:`);
+    if (marketArbitrageOpportunities.length > 0) {
+      console.log(`   Encontradas ${marketArbitrageOpportunities.length} oportunidades de arbitraje vs mercado`);
+      marketArbitrageOpportunities.slice(0, 5).forEach((opp, idx) => {
+        console.log(`   ${idx + 1}. ${opp.pair}: ${opp.arbitrageType} | Spread: ${opp.spreadPct > 0 ? '+' : ''}${opp.spreadPct.toFixed(3)}%`);
+      });
+    } else {
+      console.log(`   No se detectaron diferencias significativas con el mercado`);
+    }
+    
+    // Log de mejor ruta
+    if (bestRoute) {
+      console.log(`\n⭐ MEJOR RUTA (${optimizationObjective.toUpperCase()}): ${bestRoute.senderName} (${bestRoute.senderAsset}) → ${bestRoute.receiverShort} (${bestRoute.receiverAsset})`);
+      
+      switch (optimizationObjective) {
+        case 'roundtrip':
+          console.log(`   ROI ida-y-vuelta: ${bestRoute.roiToSenderPct.toFixed(3)}%`);
+          console.log(`   Producto: ${bestRoute.roundTripProduct.toFixed(6)}`);
+          break;
+        case 'max_rate':
+          console.log(`   Tasa: ${bestRoute.rate.toFixed(4)} ${bestRoute.receiverAsset}/${bestRoute.senderAsset}`);
+          break;
+        case 'min_cost':
+          console.log(`   Costo por unidad destino: ${bestRoute.costPerDestUnit.toFixed(4)} ${bestRoute.senderAsset}/${bestRoute.receiverAsset}`);
+          break;
+      }
+      
+      console.log(`   Tasa forward: ${bestRoute.rate.toFixed(4)} | Costo/dest: ${bestRoute.costPerDestUnit.toFixed(4)}`);
+      if (bestRoute.hasRoundTrip) {
+        console.log(`   ✓ Tiene regreso disponible (ROI: ${bestRoute.roiToSenderPct.toFixed(3)}%)`);
+      }
+    }
+    
+    if (arbitrageOpportunities.length > 0) {
+      console.log(`\n🔄 ARBITRAJE TRIANGULAR DETECTADO: ${arbitrageOpportunities.length} oportunidades`);
+      arbitrageOpportunities.slice(0, 3).forEach((opp, idx) => {
+        console.log(`   ${idx + 1}. ${opp.description} | Ganancia: ${opp.profit}`);
+      });
+    } else {
+      console.log(`\n🔄 No se detectaron oportunidades de arbitraje triangular`);
+    }
+    
+    res.json({
+      success: true,
+      matrix: matrix,
+      bestRoute: bestRoute,
+      assetRates: assetRates,
+      arbitrage: {
+        count: arbitrageOpportunities.length,
+        opportunities: arbitrageOpportunities.slice(0, 10),
+        top: arbitrageOpportunities[0] || null
+      },
+      marketComparison: {
+        marketRates: marketRates,
+        arbitrageOpportunities: marketArbitrageOpportunities.slice(0, 20),
+        count: marketArbitrageOpportunities.length,
+        top: marketArbitrageOpportunities[0] || null,
+        supportedCurrencies: MARKET_SUPPORTED_CURRENCIES
+      },
+      config: {
+        objective: optimizationObjective,
+        epsilonBps: epsilonBps,
+        epsilon: epsilon
+      },
+      summary: {
+        totalRoutes: senderWallets.length * receivingWallets.length,
+        senderWallets: senderWallets.length,
+        receiverWallets: receivingWallets.length,
+        amount: parseFloat(amount)
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error generando matriz:', error);
+    res.status(500).json({
+      error: 'Error al generar matriz de optimización',
+      details: error.description || error.message
+    });
+  }
+});
+
+// Endpoint para obtener cotizaciones de múltiples wallets (desde una cuenta específica)
 app.post('/api/quote-preview-multiple', async (req, res) => {
-  const { receivingWalletUrls, amount } = req.body;
+  const { receivingWalletUrls, amount, senderWalletId } = req.body;
   
   if (!receivingWalletUrls || !Array.isArray(receivingWalletUrls) || receivingWalletUrls.length === 0 || !amount) {
     return res.status(400).json({ error: 'Se requieren URLs de destino y el monto' });
@@ -381,10 +975,21 @@ app.post('/api/quote-preview-multiple', async (req, res) => {
   console.log('Monto:', amount);
   
   try {
-    const client = await createClient();
+    // Obtener configuración de la wallet emisora
+    let senderWalletConfig = null;
+    if (senderWalletId) {
+      senderWalletConfig = AVAILABLE_WALLETS.find(w => w.id === senderWalletId);
+      if (!senderWalletConfig) {
+        return res.status(400).json({ error: `Wallet ${senderWalletId} no encontrada` });
+      }
+      console.log('Wallet emisora:', senderWalletConfig.name);
+    }
+    
+    const client = await createClient(senderWalletConfig);
     
     // Obtener wallet emisora
-    const sendingWalletAddressUrl = parseWalletAddress(process.env.WALLET_URL);
+    const sendingWalletUrl = senderWalletConfig ? senderWalletConfig.url : process.env.WALLET_URL;
+    const sendingWalletAddressUrl = parseWalletAddress(sendingWalletUrl);
     const sendingWalletAddress = await client.walletAddress.get({ url: sendingWalletAddressUrl });
     
     // Convertir el monto a la menor unidad
@@ -459,52 +1064,33 @@ app.post('/api/quote-preview-multiple', async (req, res) => {
           }
         );
         
-        // Calcular valores reales
-        const debitValue = parseFloat(quote.debitAmount.value) / Math.pow(10, quote.debitAmount.assetScale);
-        const receiveValue = parseFloat(quote.receiveAmount.value) / Math.pow(10, quote.receiveAmount.assetScale);
+        // ===== CALCULAR MÉTRICAS CORRECTAMENTE =====
+        // Valores en unidades humanas
+        const debitValue = Number(quote.debitAmount.value) / (10 ** quote.debitAmount.assetScale);
+        const receiveValue = Number(quote.receiveAmount.value) / (10 ** quote.receiveAmount.assetScale);
         const originalAmount = parseFloat(amount);
         
-        // Calcular el tipo de cambio (cuántas unidades de moneda destino por 1 unidad de moneda origen)
-        const exchangeRate = receiveValue / debitValue;
+        // Tasa efectiva i->j: cuántas unidades de destino por 1 unidad de origen
+        const rate = receiveValue / debitValue;  // R_ij
+        const inverseRate = 1 / rate;            // R_ji implícita
         
-        // Calcular la comisión/fee total (diferencia entre lo que pediste enviar y lo que realmente se debitará)
-        const totalFee = debitValue - originalAmount;
-        const feePercentage = (totalFee / originalAmount) * 100;
+        const senderAsset = quote.debitAmount.assetCode;
+        const receiverAsset = quote.receiveAmount.assetCode;
+        const sameCurrency = senderAsset === receiverAsset;
         
-        // La eficiencia real es: qué porcentaje del monto original efectivamente se debitará
-        // Si pediste 10 EUR y te cobran 10.50 EUR, la eficiencia es 95.24% (estás pagando 5% más)
-        const efficiency = (originalAmount / debitValue) * 100;
-        
-        // Calcular cuánto del valor original "llega" al destinatario considerando ambas monedas
-        // Para misma moneda: es directo (receiveValue vs originalAmount)
-        // Para diferente moneda: necesitamos ver qué porcentaje del debitAmount se convierte en receiveAmount
-        const conversionEfficiency = (receiveValue / debitValue) / (1 / exchangeRate) * 100;
-        
-        // Calcular pérdida total: cuánto del monto original se pierde en el proceso
-        // Para misma moneda: originalAmount - receiveValue
-        // Para diferente moneda: necesitamos convertir receiveValue a la moneda original usando el tipo de cambio
-        const sameCurrency = quote.debitAmount.assetCode === quote.receiveAmount.assetCode;
-        let netValue; // Valor neto que llega expresado en la moneda original
-        
-        if (sameCurrency) {
-          // Mismo currency: directo
-          netValue = receiveValue;
-        } else {
-          // Diferente currency: convertir usando el tipo de cambio inverso
-          // Si envío 10 EUR y recibes 10.36 USD con tasa 1.0360
-          // El valor neto en EUR es: 10.36 / 1.0360 = 10.00 EUR (aproximadamente)
-          netValue = receiveValue / exchangeRate;
-        }
-        
-        // Eficiencia real: qué porcentaje del monto original llega como valor neto
-        const realEfficiency = (netValue / originalAmount) * 100;
+        // Fee implícito: la diferencia entre lo pedido y lo que se debita
+        // (normalmente ~0 porque fijamos debitAmount)
+        const implicitFee = debitValue - originalAmount;
+        const implicitFeePct = (implicitFee / originalAmount) * 100;
         
         console.log(`✓ Cotización para ${walletUrl}:`);
-        console.log(`  - Solicitado: ${originalAmount.toFixed(2)} ${quote.debitAmount.assetCode}`);
-        console.log(`  - Se debitará: ${debitValue.toFixed(2)} ${quote.debitAmount.assetCode} (fee: ${totalFee.toFixed(2)})`);
-        console.log(`  - Recibirá: ${receiveValue.toFixed(2)} ${quote.receiveAmount.assetCode}`);
-        console.log(`  - Valor neto: ${netValue.toFixed(2)} ${quote.debitAmount.assetCode}`);
-        console.log(`  - Eficiencia real: ${realEfficiency.toFixed(2)}%`);
+        console.log(`  - Solicitado: ${originalAmount.toFixed(2)} ${senderAsset}`);
+        console.log(`  - Se debitará: ${debitValue.toFixed(2)} ${senderAsset}`);
+        console.log(`  - Recibirá: ${receiveValue.toFixed(2)} ${receiverAsset}`);
+        console.log(`  - Tasa efectiva: ${rate.toFixed(4)} ${receiverAsset}/${senderAsset}`);
+        if (!sameCurrency) {
+          console.log(`  - Tasa inversa: ${inverseRate.toFixed(4)} ${senderAsset}/${receiverAsset}`);
+        }
         
         return {
           success: true,
@@ -513,21 +1099,20 @@ app.post('/api/quote-preview-multiple', async (req, res) => {
             debitAmount: {
               value: debitValue,
               valueInBaseUnits: quote.debitAmount.value,
-              assetCode: quote.debitAmount.assetCode,
+              assetCode: senderAsset,
               assetScale: quote.debitAmount.assetScale
             },
             receiveAmount: {
               value: receiveValue,
               valueInBaseUnits: quote.receiveAmount.value,
-              assetCode: quote.receiveAmount.assetCode,
+              assetCode: receiverAsset,
               assetScale: quote.receiveAmount.assetScale
             },
-            exchangeRate: exchangeRate,
-            netValue: netValue, // Valor neto que llega (en moneda del remitente)
-            totalFee: totalFee, // Fee total en moneda del remitente
-            feePercentage: feePercentage, // Porcentaje de fee
-            realEfficiency: realEfficiency, // Eficiencia real (%)
-            costToSend: debitValue // Costo real para enviar (lo que se debitará)
+            rate: rate,                       // Tasa efectiva destino/origen
+            inverseRate: inverseRate,         // Tasa inversa origen/destino
+            implicitFee: implicitFee,         // Fee implícito (normalmente ~0)
+            implicitFeePct: implicitFeePct,   // Porcentaje de fee implícito
+            sameCurrency: sameCurrency        // Si es misma divisa o no
           }
         };
         
@@ -544,9 +1129,69 @@ app.post('/api/quote-preview-multiple', async (req, res) => {
     // Esperar todas las cotizaciones
     const quotes = await Promise.all(quotePromises);
     
+    // ===== COMPARAR CON TASAS DE MERCADO =====
+    console.log(`\n💱 Obteniendo tasas de mercado para comparación...`);
+    let marketComparison = null;
+    
+    try {
+      // Obtener moneda del sender
+      const senderAsset = sendingWalletAddress.assetCode;
+      
+      if (MARKET_SUPPORTED_CURRENCIES.includes(senderAsset)) {
+        const marketRates = await getMarketRates(senderAsset);
+        
+        if (marketRates) {
+          const marketOpportunities = [];
+          
+          for (const quote of quotes) {
+            if (!quote.success) continue;
+            
+            const receiverAsset = quote.quote.receiveAmount.assetCode;
+            const opRate = quote.quote.rate;
+            const marketRate = marketRates[receiverAsset];
+            
+            if (marketRate && MARKET_SUPPORTED_CURRENCIES.includes(receiverAsset)) {
+              const spreadPct = ((opRate - marketRate) / marketRate) * 100;
+              
+              if (Math.abs(spreadPct) > 0.01) { // Más de 0.01% de diferencia
+                marketOpportunities.push({
+                  walletUrl: quote.walletUrl,
+                  pair: `${senderAsset}→${receiverAsset}`,
+                  openPaymentsRate: opRate,
+                  marketRate: marketRate,
+                  spreadPct: spreadPct,
+                  arbitrageType: spreadPct > 0 ? 'OP_MEJOR' : 'MERCADO_MEJOR',
+                  profitPotential: Math.abs(spreadPct)
+                });
+                
+                console.log(`  ${quote.walletUrl.split('/').pop()}: OP=${opRate.toFixed(4)} vs Mercado=${marketRate.toFixed(4)} | ${spreadPct > 0 ? '✅' : '❌'} ${spreadPct > 0 ? '+' : ''}${spreadPct.toFixed(3)}%`);
+              }
+            }
+          }
+          
+          marketOpportunities.sort((a, b) => b.profitPotential - a.profitPotential);
+          
+          marketComparison = {
+            baseCurrency: senderAsset,
+            marketRates: marketRates,
+            opportunities: marketOpportunities,
+            count: marketOpportunities.length,
+            top: marketOpportunities[0] || null
+          };
+          
+          console.log(`✓ ${marketOpportunities.length} diferencias detectadas vs mercado`);
+        }
+      } else {
+        console.log(`⚠️ ${senderAsset} no soportado por Frankfurter API`);
+      }
+    } catch (error) {
+      console.error('Error obteniendo tasas de mercado:', error.message);
+    }
+    
     res.json({
       success: true,
-      quotes: quotes
+      quotes: quotes,
+      marketComparison: marketComparison
     });
     
   } catch (error) {
@@ -689,11 +1334,55 @@ app.post('/api/quote-preview', async (req, res) => {
   }
 });
 
-// Endpoint para verificar el estado del servidor
+// Endpoint para listar todas las wallets disponibles
+app.get('/api/wallets', async (req, res) => {
+  try {
+    const walletsInfo = [];
+    
+    for (const walletConfig of AVAILABLE_WALLETS) {
+      try {
+        const client = await createClient(walletConfig);
+        const walletAddressUrl = parseWalletAddress(walletConfig.url);
+        const walletAddress = await client.walletAddress.get({ url: walletAddressUrl });
+        
+        walletsInfo.push({
+          id: walletConfig.id,
+          name: walletConfig.name,
+          url: walletAddress.id,
+          assetCode: walletAddress.assetCode,
+          assetScale: walletAddress.assetScale,
+          authServer: walletAddress.authServer,
+          resourceServer: walletAddress.resourceServer
+        });
+      } catch (error) {
+        console.error(`Error obteniendo info de wallet ${walletConfig.name}:`, error.message);
+        walletsInfo.push({
+          id: walletConfig.id,
+          name: walletConfig.name,
+          url: walletConfig.url,
+          error: error.message,
+          available: false
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      wallets: walletsInfo
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para verificar el estado del servidor (legacy - mantener compatibilidad)
 app.get('/api/status', async (req, res) => {
   try {
     const client = await createClient();
-    const walletAddressUrl = parseWalletAddress(process.env.WALLET_URL);
+    const walletAddressUrl = parseWalletAddress(process.env.WALLET_URL || AVAILABLE_WALLETS[0]?.url);
     const walletAddress = await client.walletAddress.get({ url: walletAddressUrl });
     
     res.json({
@@ -702,7 +1391,8 @@ app.get('/api/status', async (req, res) => {
         id: walletAddress.id,
         assetCode: walletAddress.assetCode,
         assetScale: walletAddress.assetScale
-      }
+      },
+      availableWallets: AVAILABLE_WALLETS.length
     });
   } catch (error) {
     res.status(500).json({
