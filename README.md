@@ -1,126 +1,167 @@
-# Open Payments CLI
+# 💸 Open Payments - Interfaz Web
 
-This is an interactive command line tool that makes it easy to call the [Open Payments APIs](https://openpayments.guide/) in order to initiate payments between wallet addresses.
+Una interfaz web simple y moderna para enviar pagos usando Interledger Open Payments.
 
-## Prerequisites
+## 🚀 Características
 
-The tool uses an authenticated [Open Payments SDK](https://github.com/interledger/open-payments/tree/main/packages/open-payments) to make the Open Payment requests. As a result, you will need to provide authentication information to get started, specifically, the `clientWalletAddress` (by which the client identifies itself by) a `privateKey` and its corresponding `keyId`. A guide on how to get these credentials can be found [here](https://openpayments.guide/snippets/before-you-begin/#obtain-a-public-private-key-pair-and-key-id).
+- ✨ Interfaz web intuitiva y moderna
+- 💳 Envía pagos a cualquier wallet de Interledger
+- 🔒 Seguro y basado en el protocolo Open Payments
+- 📊 Visualización del estado de la wallet
+- 🎯 Proceso de pago simplificado
 
-Once `clientWalletAddress`, the `privateKey` and `keyId` are generated, you can begin using the tool.
+## 📋 Requisitos Previos
 
-## Installation
+- Node.js (versión 14 o superior)
+- Una wallet de Interledger con claves de desarrollador configuradas
+- Acceso a la red de prueba de Interledger
 
-`pnpm i`
+## 🛠️ Instalación
 
-## Usage
+1. **Clonar el repositorio** (o descargar los archivos)
 
-#### `pnpm start`
-
-This will prompt you to enter the information to create the client: `clientWalletAddress`, `privateKey` and `keyId`, as well as the sending and reciving wallet addresses.
-
-#### `pnpm start:config`
-
-This will start up the session using values that are set in `.env`:
-
+2. **Instalar dependencias:**
+```bash
+npm install
 ```
-CLIENT_WALLET_ADDRESS=
-KEY_ID=
-PRIVATE_KEY=
-SENDING_WALLET_ADDRESS=
-RECEIVING_WALLET_ADDRESS=
-```
-
-## Wallet addresses
-
-When entering wallet addresses into the CLI (for initializing the client, or setting sending and receiving wallet addresses), you can use the `https://` prefix (`https://ilp.five.rafikilabs.com/alice`) or the `$` [payment pointer](https://paymentpointers.org) prefix (`$ilp.five.rafikilabs.com/alice`).
-
-## Commands
-
-| Command                                                                             | Description                                     |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------- |
-| [`ip:create <incomingAmount?>`](#ipcreate-incomingamount)                           | Create an incoming payment                      |
-| [`ip:complete`](#ipcomplete)                                                        | Complete an incoming payment                    |
-| [`ip:get`](#ipget)                                                                  | Retrieve an incoming payment                    |
-| [`quote:create <debitAmount?>`](#quotecreate-debitamount)                           | Create a quote                                  |
-| [`quote:get`](#quoteget)                                                            | Retrieve a quote                                |
-| [`op:create`](#opcreate)                                                            | Create an outgoing payment                      |
-| [`op:get`](#opget)                                                                  | Retrieve an outgoing payment                    |
-| [`grant:op <debitAmount?> <receiveAmount?>` ](#grantop-debitamount-receiveamount)   | Request a grant for an outgoing payment         |
-| [`session:get`](#sessionget)                                                        | Displays the information of the current session |
-| [`session:wa:set-receiving <walletAddress>`](#sessionwaset-receiving-walletaddress) | Set sending wallet address for the session      |
-| [`session:wa:set-sending <walletAddress>`](#sessionwaset-receiving-walletaddress)   | Set receiving wallet address for the session    |
-| [`scenario <fileName>`](#scenario-filename)                                         | Run a list of commands from a file              |
-| [`exit`](#exit)                                                                     | Exits the application                           |
-
-### `ip:create <incomingAmount?>`
-
-Creates an incoming payment on the receiving wallet address for an optionally specified incoming amount.
-If no saved grant in the session, requests a default grant before creating an incoming payment.
-Then, saves the incoming payment and possibly its corresponding grant in the session.
-
-### `ip:complete`
-
-Completes the incoming payment previously created in the session.
-
-### `ip:get`
-
-Fetches the incoming payment previously created in the session.
-
-### `quote:create <debitAmount?>`
-
-Creates an quote on the sending wallet address for an optionally specified debit amount.
-If there is no existing quote grant in the session, requests a default grant before creating a quote.
-Then, saves the quote and possibly its corresponding grant in the session.
-
-### `quote:get`
-
-Fetches the quote previously created in the session.
-
-### `op:create`
-
-Creates an outgoing payment on the sending wallet address. If there is no existing saved grant in the session, requests a default grant, prompts to complete the interaction and creates the outgoing payment. Then, saves the outgoing payment and its corresponding grant in the session.
-
-### `op:get`
-
-Fetches an outgoing payment previously created in the session.
-
-### `grant:op <debitAmount?> <receiveAmount?>`
-
-Initiates an outgoing payment grant request. If no `debitAmount` or `receiveAmount` provided, uses the amounts from the created quote of the session. After the pending grant is requested, a prompt will apprear to enter the URL of the completed redirect site of the interaction. The URL must contain a `interact_ref`. Once entered, the grant will be finalized, and outgoing payments can now be created.
-
-### `session:get`
-
-Displays the information of the current session.
-
-### `session:wa:set-receiving <walletAddress>`
-
-Sets the receiving wallet address for the session to be used in incoming payment requests going forward.
-
-### `session:wa:set-sending <walletAddress>`
-
-Sets the sending wallet address for the session to be used in requests for quotes and outgoing payments going forward.
-
-### `scenario <fileName>`
-
-Runs a list of commands in the provided file. For example, with a file named `scenario-1.txt`:
-
-```
-session:wa:set-sending https://ilp.five.rafikilabs.com/ffc52473
-session:wa:set-receiving https://ilp.five.rafikilabs.com/a76f14b7
-ip:create
-quote:create 10
-grant:op
-op:create
+O si usas pnpm:
+```bash
+pnpm install
 ```
 
-calling `scenario scenario-1.txt` will run the given commands sequentially in the session.
+3. **Configurar variables de entorno:**
 
-The commands in the example scenario file will initiate a payment between `https://ilp.five.rafikilabs.com/ffc52473` and `https://ilp.five.rafikilabs.com/a76f14b7`. Like a normal session, `grant:op` will prompt you to enter the URL of the resulting redirect site of the interaction, after which it will run the final `op:create` command to create the outgoing payment.
+Crea un archivo `.env` en la raíz del proyecto con la siguiente información:
 
-### `exit`
+```env
+KEY_ID=tu-key-id-aquí
+WALLET_URL=https://ilp.interledger-test.dev/tu-wallet-id
+PRIVATE_KEY_PATH=./keys/private_python.key
+PUBLIC_KEY_PATH=./keys/public_python.key
+PORT=3000
+```
 
-Exits the application.
+Reemplaza los valores con tu información:
+- `KEY_ID`: El ID de tu clave de desarrollador
+- `WALLET_URL`: La URL de tu wallet de Interledger
+- `PRIVATE_KEY_PATH`: Ruta a tu archivo de clave privada
+- `PUBLIC_KEY_PATH`: Ruta a tu archivo de clave pública
+- `PORT`: Puerto en el que se ejecutará el servidor (opcional, default: 3000)
 
-## Logging
+4. **Asegúrate de tener tus claves:**
 
-By default, the application saves all of the logs for each session in `/logs`.
+Coloca tus archivos de clave privada y pública en la carpeta `keys/`:
+- `keys/private_python.key`
+- `keys/public_python.key`
+
+## 🎮 Uso
+
+### Iniciar el Servidor Web
+
+```bash
+npm run server
+```
+
+O con pnpm:
+```bash
+pnpm server
+```
+
+El servidor se iniciará en `http://localhost:3000` (o el puerto que hayas configurado).
+
+### Usar la Interfaz Web
+
+1. Abre tu navegador y ve a `http://localhost:3000`
+2. Verás el estado de tu wallet en la parte superior
+3. Completa el formulario:
+   - **URL de Wallet Destino**: La URL completa de la wallet que recibirá el pago
+   - **Monto**: El monto a enviar (en la menor unidad de la moneda, ej: centavos)
+   - **Descripción**: (Opcional) Una nota sobre el pago
+4. Haz clic en "Enviar Pago"
+5. Espera a que se procese el pago
+6. ¡Verás una confirmación con los detalles del pago!
+
+### Ejemplo de Uso
+
+Si tu wallet tiene USD con escala 2:
+- Monto: `100` = $1.00 USD
+- Monto: `500` = $5.00 USD
+- Monto: `1000` = $10.00 USD
+
+## 🔧 Modo CLI (Línea de Comandos)
+
+También puedes usar la aplicación en modo CLI:
+
+```bash
+npm start
+```
+
+O con configuración desde el archivo .env:
+```bash
+npm run start:config
+```
+
+## 📁 Estructura del Proyecto
+
+```
+.
+├── README.md
+├── index.js                    # CLI principal
+├── server.js                   # Servidor web Express
+├── package.json
+├── .env                        # Variables de entorno (no incluido)
+├── keys/
+│   ├── private_python.key      # Tu clave privada (no incluido)
+│   └── public_python.key       # Tu clave pública (no incluido)
+├── public/
+│   └── index.html              # Interfaz web
+└── src/
+    ├── handlers/
+    │   ├── incoming-payment.js
+    │   ├── outgoing-payment.js
+    │   ├── quote.js
+    │   ├── scenario.js
+    │   └── session.js
+    └── utils.js
+```
+
+## 🔐 Seguridad
+
+- **NUNCA** compartas tu clave privada
+- **NUNCA** subas tu archivo `.env` a GitHub
+- Las claves están en `.gitignore` por defecto
+- Usa solo en redes de prueba hasta que estés seguro
+
+## 🐛 Solución de Problemas
+
+### Error: "No se pudo conectar"
+- Verifica que tu archivo `.env` esté configurado correctamente
+- Asegúrate de que tu `WALLET_URL` y `KEY_ID` sean válidos
+- Verifica que tus archivos de clave existan en la carpeta `keys/`
+
+### Error: "Grant no aprobado"
+- Algunos pagos requieren aprobación interactiva
+- Si aparece una URL de interacción, ábrela en tu navegador para aprobar el pago
+- La URL de interacción aparecerá en el mensaje de error
+
+### Error: "Invalid grant"
+- Verifica que tu clave privada corresponda a la clave pública registrada en tu wallet
+- Asegúrate de que tu `KEY_ID` sea correcto
+
+## 📚 Recursos
+
+- [Documentación de Open Payments](https://openpayments.guide/)
+- [Interledger Foundation](https://interledger.org/)
+- [Red de Prueba de Interledger](https://interledger-test.dev/)
+
+## 🤝 Contribuciones
+
+Las contribuciones son bienvenidas. Por favor, abre un issue o pull request.
+
+## 📄 Licencia
+
+ISC
+
+## 🙏 Agradecimientos
+
+Basado en el SDK de Open Payments de Interledger Foundation.

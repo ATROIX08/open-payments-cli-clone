@@ -1,0 +1,98 @@
+═══════════════════════════════════════════════════════════════════
+  🚀 INICIO RÁPIDO - Interfaz Web de Pagos Interledger
+═══════════════════════════════════════════════════════════════════
+
+📋 REQUISITOS:
+   ✅ Node.js instalado
+   ✅ Archivo .env configurado
+   ✅ Claves en carpeta keys/
+
+═══════════════════════════════════════════════════════════════════
+
+🎯 PARA EMPEZAR (3 PASOS):
+
+   1️⃣  Instalar dependencias (solo la primera vez):
+       
+       npm install
+
+   2️⃣  Iniciar el servidor:
+       
+       npm run server
+       
+       O doble click en:
+       - Windows: start.bat
+       - Linux/Mac: start.sh
+
+   3️⃣  Abrir en el navegador:
+       
+       http://localhost:3000
+
+═══════════════════════════════════════════════════════════════════
+
+💸 CÓMO ENVIAR UN PAGO:
+
+   1. Pega la URL de la wallet destino
+   2. Ingresa el monto (ej: 100 = $1.00)
+   3. Agrega una descripción (opcional)
+   4. Click en "Enviar Pago"
+   5. ¡Listo! ✨
+
+═══════════════════════════════════════════════════════════════════
+
+📚 DOCUMENTACIÓN:
+
+   - CHECKLIST.md ........... Verificación completa
+   - RESUMEN.md .............. Vista general del proyecto
+   - GUIA_RAPIDA.md .......... Guía de 2 minutos
+   - INSTRUCCIONES.md ........ Tutorial detallado
+   - README.md ............... Documentación técnica
+
+═══════════════════════════════════════════════════════════════════
+
+🎨 CARACTERÍSTICAS:
+
+   ✨ Interfaz moderna y profesional
+   🔄 Cambia el destinatario fácilmente
+   📊 Estado de conexión en tiempo real
+   ⚡ Proceso automático de pago
+   🎯 Simple y rápido de usar
+
+═══════════════════════════════════════════════════════════════════
+
+🔧 SOLUCIÓN RÁPIDA:
+
+   ❌ Error "Cannot find module"
+      → npm install
+
+   ❌ Error "Port 3000 in use"
+      → Agrega PORT=3001 en .env
+
+   ❌ No carga la página
+      → ¿Está el servidor corriendo?
+      → Verifica http://localhost:3000
+
+═══════════════════════════════════════════════════════════════════
+
+📞 COMANDOS ÚTILES:
+
+   npm install ................. Instalar dependencias
+   npm run server .............. Iniciar servidor web
+   npm start ................... Iniciar CLI original
+
+═══════════════════════════════════════════════════════════════════
+
+🎉 ¡TODO ESTÁ LISTO!
+
+   Tu repositorio ahora tiene una interfaz web completa.
+   
+   Simplemente inicia el servidor y abre tu navegador.
+   
+   ¡Comienza a enviar pagos con Interledger! 💸
+
+═══════════════════════════════════════════════════════════════════
+
+💡 TIP: Lee CHECKLIST.md antes de empezar para asegurarte de que
+         todo esté configurado correctamente.
+
+═══════════════════════════════════════════════════════════════════
+

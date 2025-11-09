@@ -1,33 +1,28 @@
-# Macs
-.DS_Store
+# Dependencies
+node_modules/
+package-lock.json
+pnpm-lock.yaml
 
-# Logs
-logs
-*.log
-
-# Diagnostic reports (https://nodejs.org/api/report.html)
-report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-*.txt
-
-# Optional eslint cache
-.eslintcache
-
-dist
-
-# IDEs
-.idea/
-.vscode/
-
-# node_modules
-**/node_modules
-
+# Environment variables
 .env
 
+# Private keys
+keys/*.key
+keys/*.pem
+*.key
 *.pem
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
